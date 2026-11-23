@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.QingErTranscriber" parent="Theme.Material3.Light.NoActionBar">
+        <item name="colorPrimary">#2563EB</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="android:statusBarColor">#F6F7FB</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>
