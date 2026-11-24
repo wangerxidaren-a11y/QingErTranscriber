@@ -1,9 +1,10 @@
 # 清耳转录（QingEr Transcriber）
 
-专为小米手机（arm64-v8a，适配小米 14 / 小米 17 等澎湃 OS 机型）打造的**零广告、纯开源、全离线**音视频转录工具。
+专为小米手机（arm64-v8a，适配小米 14 / 小米 17 等澎湃 OS 机型）打造的**零广告、纯开源**音视频转录工具，支持在线与本地双引擎一键切换。
 
 ## 核心能力
-- **底层开源引擎**：基于 [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) + 阿里开源 [SenseVoiceSmall](https://github.com/FunAudioLLM/SenseVoice)（int8 量化版，自动识别中英粤日韩并自动加标点）。
-- **多源一键导入**：支持直接粘贴或系统分享 **小宇宙单集链接**、**B 站视频链接（含 `b23.tv`）**、**播客 RSS/音频直链**，以及选取手机本地音视频文件。
+- **在线极速模式（v1.1 新增，默认）**：接硅基流动免费语音转文本接口（`FunAudioLLM/SenseVoiceSmall`，另有 `TeleAI/TeleSpeechASR` 预设），速度比本地离线快很多，无需下载 228 MB 模型；按约 3 分钟静音点自动分段上传，实时输出带 `[HH:MM:SS]` 时间戳的文稿。支持自定义 API 地址和模型名，兼容 Groq 等 OpenAI 格式接口。断网或在线不可用时自动回退本地离线，也可一键手动切换。
+- **本地离线模式**：基于 [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) + 阿里开源 [SenseVoiceSmall](https://github.com/FunAudioLLM/SenseVoice)（int8 量化版，自动识别中英粤日韩并自动加标点），音频不出手机，永久免费。
+- **多源一键导入**：支持直接粘贴或系统分享 **小宇宙单集链接**、**B 站视频链接（含 `b23.tv`）**、**小红书笔记链接（含 `xhslink.com` 短链与分享口令，仅视频笔记）**、**播客 RSS/音频直链**，以及选取手机本地音视频文件。
 - **国内高速下载模型**：首次打开点一次「一键下载离线模型」，自动优先从魔搭社区（ModelScope）拉取约 228 MB 模型文件，之后永久离线运行。
 - **后台保活与导出**：内置前台服务与 WakeLock，支持锁屏转写超长播客，自动生成带时间戳的 Markdown 文稿并支持一键复制或导出分享。
