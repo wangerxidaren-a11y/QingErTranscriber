@@ -154,8 +154,10 @@ class TranscriberService : Service() {
             var tempAudioFile: File? = null
             var recognizer: OfflineRecognizer? = null
             try {
-                if (!ModelManager.isModelReady(applicationContext)) {
-                    throw IllegalStateException("离线模型尚未下载，请先点击顶部「下载离线模型」")
+                val onlineEnabled = TranscribeSettings.isOnlineEnabled(applicationContext)
+                val groqApiKey = TranscribeSettings.getGroqApiKey(applicationContext)
+                if (!onlineEnabled && !ModelManager.isModelReady(applicationContext)) {
+                    throw IllegalStateException("离线模型尚未下载，请先点击顶部「下载离线模型」；也可以在设置里填写 Groq 免费 API 密钥使用在线转写")
                 }
 
                 var title = localName ?: "未命名音频"
@@ -182,22 +184,37 @@ class TranscriberService : Service() {
 
                 if (cancelled) return@launch
 
-                updateState(isRunning = true, status = "正在加载离线语音大模型（SenseVoice）…", progress = 26)
-                val threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 6)
-                val config = OfflineRecognizerConfig(
-                    featConfig = FeatureConfig(sampleRate = 16000, featureDim = 80),
-                    modelConfig = OfflineModelConfig(
-                        senseVoice = OfflineSenseVoiceModelConfig(
-                            model = ModelManager.getModelFile(applicationContext).absolutePath,
-                            language = "",
-                            useInverseTextNormalization = true
-                        ),
-                        tokens = ModelManager.getTokensFile(applicationContext).absolutePath,
-                        numThreads = threads,
-                        provider = "cpu"
+                // 离线引擎按需加载：纯在线任务不加载模型；在线失败回退时才加载
+                var useOnline = onlineEnabled
+                var fellBack = false
+                fun ensureOfflineRecognizer(): OfflineRecognizer {
+                    recognizer?.let { return it }
+                    if (!ModelManager.isModelReady(applicationContext)) {
+                        throw IllegalStateException("离线模型尚未下载，请先点击顶部「下载离线模型」")
+                    }
+                    updateState(isRunning = true, status = "正在加载离线语音大模型（SenseVoice）…")
+                    val threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 6)
+                    val config = OfflineRecognizerConfig(
+                        featConfig = FeatureConfig(sampleRate = 16000, featureDim = 80),
+                        modelConfig = OfflineModelConfig(
+                            senseVoice = OfflineSenseVoiceModelConfig(
+                                model = ModelManager.getModelFile(applicationContext).absolutePath,
+                                language = "",
+                                useInverseTextNormalization = true
+                            ),
+                            tokens = ModelManager.getTokensFile(applicationContext).absolutePath,
+                            numThreads = threads,
+                            provider = "cpu"
+                        )
                     )
-                )
-                recognizer = OfflineRecognizer(assetManager = null, config = config)
+                    val created = OfflineRecognizer(assetManager = null, config = config)
+                    recognizer = created
+                    return created
+                }
+
+                if (useOnline) {
+                    updateState(isRunning = true, status = "正在准备在线转写（Groq 免费版）…", progress = 26)
+                }
 
                 sb.append("# ").append(title).append("\n")
                 if (!rawUrl.isNullOrBlank()) {
@@ -214,11 +231,42 @@ class TranscriberService : Service() {
                     uri = localUri,
                     isCancelled = { cancelled }
                 ) { samples, startSec, fraction ->
-                    val stream = recognizer.createStream()
+                    // 在线优先：Groq 成功则用在线结果；一旦失败（额度用完/密钥无效/网络问题）
+                    // 就记一次回退，本段及之后全部改走离线引擎
+                    if (useOnline) {
+                        try {
+                            val segments = GroqTranscriber.transcribeChunk(samples, groqApiKey)
+                            for (seg in segments) {
+                                segmentCount++
+                                sb.append("[").append(formatTime(startSec + seg.start)).append("] ")
+                                    .append(seg.text).append("\n\n")
+                            }
+                            val overallPct = 28 + (fraction * 70f).toInt()
+                            updateState(
+                                isRunning = true,
+                                status = "在线转写中（Groq 免费版，已处理至 ${formatTime(startSec)}，共 $segmentCount 段）…",
+                                progress = overallPct.coerceIn(28, 99),
+                                transcript = sb.toString()
+                            )
+                            return@decodeInChunks
+                        } catch (e: GroqFallbackException) {
+                            useOnline = false
+                            fellBack = true
+                            sb.append("\n> ℹ️ ${e.message}，从此处起改用离线引擎继续转写\n\n")
+                            updateState(
+                                isRunning = true,
+                                status = "在线转写不可用，正在切换为离线转写…",
+                                transcript = sb.toString()
+                            )
+                        }
+                    }
+
+                    val offlineRecognizer = ensureOfflineRecognizer()
+                    val stream = offlineRecognizer.createStream()
                     try {
                         stream.acceptWaveform(samples, 16000)
-                        recognizer.decode(stream)
-                        val text = recognizer.getResult(stream).text.trim()
+                        offlineRecognizer.decode(stream)
+                        val text = offlineRecognizer.getResult(stream).text.trim()
                         if (text.isNotEmpty()) {
                             segmentCount++
                             sb.append("[").append(formatTime(startSec)).append("] ").append(text).append("\n\n")
@@ -227,9 +275,10 @@ class TranscriberService : Service() {
                         stream.release()
                     }
                     val overallPct = 28 + (fraction * 70f).toInt()
+                    val engineLabel = if (fellBack) "离线转写中（在线额度已用完，已处理至" else "离线转写中（已处理至"
                     updateState(
                         isRunning = true,
-                        status = "离线转写中（已处理至 ${formatTime(startSec)}，共 $segmentCount 段）…",
+                        status = "$engineLabel ${formatTime(startSec)}，共 $segmentCount 段）…",
                         progress = overallPct.coerceIn(28, 99),
                         transcript = sb.toString()
                     )
@@ -237,9 +286,14 @@ class TranscriberService : Service() {
 
                 val finalText = sb.toString()
                 val savedFile = saveTranscript(title, finalText)
+                val engineNote = when {
+                    onlineEnabled && !fellBack -> "（在线 Groq）"
+                    onlineEnabled && fellBack -> "（在线+离线混合）"
+                    else -> "（离线）"
+                }
                 updateState(
                     isRunning = false,
-                    status = "转写完成！共 $segmentCount 段，已自动保存文稿",
+                    status = "转写完成$engineNote！共 $segmentCount 段，已自动保存文稿",
                     progress = 100,
                     transcript = finalText,
                     savedFilePath = savedFile.absolutePath
