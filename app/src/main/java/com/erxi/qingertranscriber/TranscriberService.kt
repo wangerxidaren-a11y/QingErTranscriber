@@ -155,9 +155,11 @@ class TranscriberService : Service() {
             var recognizer: OfflineRecognizer? = null
             try {
                 val onlineEnabled = TranscribeSettings.isOnlineEnabled(applicationContext)
-                val groqApiKey = TranscribeSettings.getGroqApiKey(applicationContext)
+                val onlineApiKey = TranscribeSettings.getApiKey(applicationContext)
+                val onlineBaseUrl = TranscribeSettings.getBaseUrl(applicationContext)
+                val onlineModel = TranscribeSettings.getModel(applicationContext)
                 if (!onlineEnabled && !ModelManager.isModelReady(applicationContext)) {
-                    throw IllegalStateException("离线模型尚未下载，请先点击顶部「下载离线模型」；也可以在设置里填写 Groq 免费 API 密钥使用在线转写")
+                    throw IllegalStateException("离线模型尚未下载，请先点击顶部「下载离线模型」；也可以在「在线设置」里填写 API Key 后使用在线转写")
                 }
 
                 var title = localName ?: "未命名音频"
@@ -213,7 +215,7 @@ class TranscriberService : Service() {
                 }
 
                 if (useOnline) {
-                    updateState(isRunning = true, status = "正在准备在线转写（Groq 免费版）…", progress = 26)
+                    updateState(isRunning = true, status = "正在准备在线转写…", progress = 26)
                 }
 
                 sb.append("# ").append(title).append("\n")
@@ -225,17 +227,25 @@ class TranscriberService : Service() {
                 sb.append("\n")
 
                 var segmentCount = 0
+                // 在线按约 3 分钟静音点分段上传（单段 WAV 约 6 MB，远小于接口 50 MB 上限）；
+                // 离线沿用 16~26 秒小分段，适配本机模型
+                val minChunkSec = if (onlineEnabled) 150 else 16
+                val maxChunkSec = if (onlineEnabled) 200 else 26
                 AudioDecoder.decodeInChunks(
                     context = applicationContext,
                     file = tempAudioFile,
                     uri = localUri,
-                    isCancelled = { cancelled }
+                    isCancelled = { cancelled },
+                    minChunkSec = minChunkSec,
+                    maxChunkSec = maxChunkSec
                 ) { samples, startSec, fraction ->
-                    // 在线优先：Groq 成功则用在线结果；一旦失败（额度用完/密钥无效/网络问题）
-                    // 就记一次回退，本段及之后全部改走离线引擎
+                    // 在线优先：在线成功则用在线结果；一旦失败（密钥无效/限流/网络问题）
+                    // 就记一次回退，本段及之后全部改走本地离线引擎
                     if (useOnline) {
                         try {
-                            val segments = GroqTranscriber.transcribeChunk(samples, groqApiKey)
+                            val segments = OnlineTranscriber.transcribeChunk(
+                                samples, onlineBaseUrl, onlineApiKey, onlineModel
+                            )
                             for (seg in segments) {
                                 segmentCount++
                                 sb.append("[").append(formatTime(startSec + seg.start)).append("] ")
@@ -244,18 +254,18 @@ class TranscriberService : Service() {
                             val overallPct = 28 + (fraction * 70f).toInt()
                             updateState(
                                 isRunning = true,
-                                status = "在线转写中（Groq 免费版，已处理至 ${formatTime(startSec)}，共 $segmentCount 段）…",
+                                status = "在线极速转写中（已处理至 ${formatTime(startSec)}，共 $segmentCount 段）…",
                                 progress = overallPct.coerceIn(28, 99),
                                 transcript = sb.toString()
                             )
                             return@decodeInChunks
-                        } catch (e: GroqFallbackException) {
+                        } catch (e: OnlineFallbackException) {
                             useOnline = false
                             fellBack = true
-                            sb.append("\n> ℹ️ ${e.message}，从此处起改用离线引擎继续转写\n\n")
+                            sb.append("\n> ℹ️ ${e.message}，从此处起改用本地离线引擎继续转写\n\n")
                             updateState(
                                 isRunning = true,
-                                status = "在线转写不可用，正在切换为离线转写…",
+                                status = "在线转写不可用，正在切换为本地离线转写…",
                                 transcript = sb.toString()
                             )
                         }
@@ -275,7 +285,7 @@ class TranscriberService : Service() {
                         stream.release()
                     }
                     val overallPct = 28 + (fraction * 70f).toInt()
-                    val engineLabel = if (fellBack) "离线转写中（在线额度已用完，已处理至" else "离线转写中（已处理至"
+                    val engineLabel = if (fellBack) "本地离线转写中（在线不可用，已处理至" else "本地离线转写中（已处理至"
                     updateState(
                         isRunning = true,
                         status = "$engineLabel ${formatTime(startSec)}，共 $segmentCount 段）…",
@@ -287,9 +297,9 @@ class TranscriberService : Service() {
                 val finalText = sb.toString()
                 val savedFile = saveTranscript(title, finalText)
                 val engineNote = when {
-                    onlineEnabled && !fellBack -> "（在线 Groq）"
-                    onlineEnabled && fellBack -> "（在线+离线混合）"
-                    else -> "（离线）"
+                    onlineEnabled && !fellBack -> "（在线极速）"
+                    onlineEnabled && fellBack -> "（在线+本地混合）"
+                    else -> "（本地离线）"
                 }
                 updateState(
                     isRunning = false,
@@ -347,16 +357,13 @@ class TranscriberService : Service() {
         nm.notify(NOTIF_ID, buildNotification(status, progress))
     }
 
+    /** 时间戳统一为 [HH:MM:SS] 格式 */
     private fun formatTime(seconds: Double): String {
         val totalSec = seconds.toInt().coerceAtLeast(0)
         val h = totalSec / 3600
         val m = (totalSec % 3600) / 60
         val s = totalSec % 60
-        return if (h > 0) {
-            String.format(Locale.US, "%02d:%02d:%02d", h, m, s)
-        } else {
-            String.format(Locale.US, "%02d:%02d", m, s)
-        }
+        return String.format(Locale.US, "%02d:%02d:%02d", h, m, s)
     }
 
     private fun createNotificationChannel() {
