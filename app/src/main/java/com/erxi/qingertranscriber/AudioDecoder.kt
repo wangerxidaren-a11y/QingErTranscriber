@@ -12,18 +12,27 @@ import kotlin.math.sqrt
 object AudioDecoder {
 
     private const val TARGET_SAMPLE_RATE = 16000
-    private const val MIN_CHUNK_SAMPLES = TARGET_SAMPLE_RATE * 16 // 最短 16 秒寻找静音切点
-    private const val MAX_CHUNK_SAMPLES = TARGET_SAMPLE_RATE * 26 // 最长 26 秒强制切分
+    private const val DEFAULT_MIN_CHUNK_SEC = 16 // 离线默认：最短 16 秒寻找静音切点
+    private const val DEFAULT_MAX_CHUNK_SEC = 26 // 离线默认：最长 26 秒强制切分
     private const val SILENCE_RMS_THRESHOLD = 0.018f
     private const val SILENCE_WINDOW = TARGET_SAMPLE_RATE / 5 // 200ms 静音检测窗
 
+    /**
+     * 解码为 16kHz 单声道分段回调。
+     * @param minChunkSec 达到该时长后遇静音即切分（在线约 3 分钟：150 秒）
+     * @param maxChunkSec 达到该时长强制切分（在线约 3 分钟：200 秒）
+     */
     fun decodeInChunks(
         context: Context,
         file: File?,
         uri: Uri?,
         isCancelled: () -> Boolean,
+        minChunkSec: Int = DEFAULT_MIN_CHUNK_SEC,
+        maxChunkSec: Int = DEFAULT_MAX_CHUNK_SEC,
         onChunk: (samples: FloatArray, startSec: Double, progressFraction: Float) -> Unit
     ) {
+        val minChunkSamples = minChunkSec * TARGET_SAMPLE_RATE
+        val maxChunkSamples = maxChunkSec * TARGET_SAMPLE_RATE
         val extractor = MediaExtractor()
         try {
             if (file != null) {
@@ -71,7 +80,7 @@ object AudioDecoder {
                 var outputDone = false
 
                 // 累计 16kHz 单声道 float 缓冲
-                var chunkBuf = FloatArray(MAX_CHUNK_SAMPLES + TARGET_SAMPLE_RATE * 4)
+                var chunkBuf = FloatArray(maxChunkSamples + TARGET_SAMPLE_RATE * 4)
                 var chunkLen = 0
                 var totalEmittedSamples = 0L
 
@@ -144,8 +153,8 @@ object AudioDecoder {
                                     prevMonoSample = mono[frameCount - 1]
 
                                     // 检查是否可以智能切分并送出识别
-                                    val shouldFlush = chunkLen >= MAX_CHUNK_SAMPLES ||
-                                        (chunkLen >= MIN_CHUNK_SAMPLES && isTrailingSilence(chunkBuf, chunkLen))
+                                    val shouldFlush = chunkLen >= maxChunkSamples ||
+                                        (chunkLen >= minChunkSamples && isTrailingSilence(chunkBuf, chunkLen))
 
                                     if (shouldFlush) {
                                         val startSec = totalEmittedSamples.toDouble() / TARGET_SAMPLE_RATE
