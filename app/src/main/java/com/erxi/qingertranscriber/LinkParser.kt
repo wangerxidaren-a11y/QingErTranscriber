@@ -34,12 +34,14 @@ object LinkParser {
 
     fun parse(rawInput: String): ParsedMedia {
         val url = extractFirstUrl(rawInput.trim())
-            ?: throw IllegalArgumentException("未在输入内容中识别到有效链接，请粘贴小宇宙、B站或音频直链")
+            ?: throw IllegalArgumentException("未在输入内容中识别到有效链接，请粘贴小宇宙、B站、小红书链接或分享口令")
 
         return when {
             url.contains("xiaoyuzhoufm.com", ignoreCase = true) -> parseXiaoyuzhou(url)
             url.contains("bilibili.com", ignoreCase = true) ||
                 url.contains("b23.tv", ignoreCase = true) -> parseBilibili(url)
+            url.contains("xiaohongshu.com", ignoreCase = true) ||
+                url.contains("xhslink.com", ignoreCase = true) -> parseXiaohongshu(url)
             isDirectMediaUrl(url) -> ParsedMedia(
                 title = url.substringAfterLast('/').substringBefore('?').ifBlank { "在线音频" },
                 audioUrl = url,
@@ -149,6 +151,68 @@ object LinkParser {
         )
     }
 
+    private fun parseXiaohongshu(inputUrl: String): ParsedMedia {
+        val resolvedUrl = if (inputUrl.contains("xhslink.com", ignoreCase = true)) {
+            resolveFinalUrl(inputUrl)
+        } else {
+            inputUrl
+        }
+
+        val noteId = Regex("""/(?:explore|discovery/item)/([A-Za-z0-9]+)""")
+            .find(resolvedUrl)?.groupValues?.get(1)
+            ?: throw IllegalArgumentException("未识别到小红书笔记链接，请复制笔记详情页、分享口令或短链")
+
+        val pageUrl = "https://www.xiaohongshu.com/explore/$noteId"
+        val xhsHeaders = mapOf(
+            "User-Agent" to DESKTOP_UA,
+            "Referer" to "https://www.xiaohongshu.com/"
+        )
+        val html = try {
+            fetchText(pageUrl, xhsHeaders)
+        } catch (e: IllegalStateException) {
+            throw IllegalStateException(
+                "小红书页面请求受限（可能触发风控），请在小红书里把视频保存到相册，然后用「选择本地文件」转录"
+            )
+        }
+
+        val title = Regex("""<meta\s+property=["']og:title["']\s+content=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+            .find(html)?.groupValues?.get(1)
+            ?: Regex("""<title>([^<]+)</title>""", RegexOption.IGNORE_CASE)
+                .find(html)?.groupValues?.get(1)
+            ?: "小红书笔记"
+
+        // 多层解析视频流地址：
+        // 1) window.__INITIAL_STATE__ 里的 masterUrl（无水印 CDN 直链）
+        // 2) originVideoKey：取 key 后在页面里找包含它的完整 CDN 地址
+        // 3) og:video
+        // 4) xhscdn.com 的 mp4 直链 / sns-video CDN
+        val masterUrl = Regex(""""masterUrl"\s*:\s*"([^"]+)"""")
+            .find(html)?.groupValues?.get(1)
+        val originKey = Regex(""""originVideoKey"\s*:\s*"([^"]+)"""")
+            .find(html)?.groupValues?.get(1)
+        val keyUrl = originKey?.let { key ->
+            Regex("""https://[^"'\\\s]*""" + Regex.escape(key) + """[^"'\\\s]*""")
+                .find(html)?.value
+        }
+        val videoUrl = masterUrl
+            ?: keyUrl
+            ?: Regex("""<meta\s+property=["']og:video["']\s+content=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+                .find(html)?.groupValues?.get(1)
+            ?: Regex("""https://[^"'\\\s]*xhscdn\.com[^"'\\\s]*\.mp4[^"'\\\s]*""").find(html)?.value
+            ?: Regex("""https://sns-video-[^"'\\\s]+""").find(html)?.value
+            ?: throw IllegalStateException(
+                "该笔记无法解析出视频地址（图文笔记没有视频，或触发了小红书风控），" +
+                    "请在小红书里把视频保存到相册，然后用「选择本地文件」转录"
+            )
+
+        return ParsedMedia(
+            title = decodeHtmlEntities(title).replace(" - 小红书", "").trim(),
+            audioUrl = videoUrl.replace("\\u002F", "/").replace("&amp;", "&"),
+            sourceType = "小红书视频",
+            headers = xhsHeaders
+        )
+    }
+
     private fun parseGenericOrRss(url: String): ParsedMedia {
         val text = fetchText(url, mapOf("User-Agent" to DESKTOP_UA))
         val enclosure = Regex("""<enclosure[^>]+url=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
@@ -157,7 +221,7 @@ object LinkParser {
                 .find(text)?.groupValues?.get(1)
             ?: Regex("""https?://[^"'\\\s]+\.(?:m4a|mp3)(?:\?[^"'\\\s]*)?""", RegexOption.IGNORE_CASE)
                 .find(text)?.value
-            ?: throw IllegalStateException("未能从该网页解析出音频地址，请尝试小宇宙/B站链接或直接上传本地音视频")
+            ?: throw IllegalStateException("未能从该网页解析出音频地址，请尝试小宇宙/B站/小红书链接或直接上传本地音视频")
 
         val title = Regex("""<title>(?:<!\[CDATA\[)?([^<\]]+)(?:\]\]>)?</title>""", RegexOption.IGNORE_CASE)
             .find(text)?.groupValues?.get(1)?.trim() ?: "播客音频"
