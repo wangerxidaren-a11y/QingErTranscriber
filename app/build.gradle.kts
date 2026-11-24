@@ -11,16 +11,32 @@ android {
         applicationId = "com.erxi.qingertranscriber"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
     }
 
+    // 固定发布签名：CI 从 Secrets 注入 keystore 与密码，保证每次构建签名一致，
+    // 以后可直接覆盖升级。本地 release 构建需自行设置 KEYSTORE_PATH 等环境变量。
+    signingConfigs {
+        create("release") {
+            val keystorePath = System.getenv("KEYSTORE_PATH")
+            if (!keystorePath.isNullOrBlank()) {
+                storeFile = file(keystorePath)
+                storeType = "PKCS12"
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
