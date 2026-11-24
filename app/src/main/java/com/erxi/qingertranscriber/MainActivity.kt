@@ -13,7 +13,10 @@ import android.provider.OpenableColumns
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -22,6 +25,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
+import com.google.android.material.button.MaterialButtonToggleGroup
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -30,6 +34,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvModelStatus: TextView
     private lateinit var btnDownloadModel: Button
     private lateinit var pbModel: ProgressBar
+    private lateinit var toggleEngine: MaterialButtonToggleGroup
+    private lateinit var btnOnlineSettings: Button
+    private lateinit var tvEngineHint: TextView
     private lateinit var etUrl: EditText
     private lateinit var btnPaste: Button
     private lateinit var btnStartUrl: Button
@@ -62,6 +69,9 @@ class MainActivity : AppCompatActivity() {
         tvModelStatus = findViewById(R.id.tvModelStatus)
         btnDownloadModel = findViewById(R.id.btnDownloadModel)
         pbModel = findViewById(R.id.pbModel)
+        toggleEngine = findViewById(R.id.toggleEngine)
+        btnOnlineSettings = findViewById(R.id.btnOnlineSettings)
+        tvEngineHint = findViewById(R.id.tvEngineHint)
         etUrl = findViewById(R.id.etUrl)
         btnPaste = findViewById(R.id.btnPaste)
         btnStartUrl = findViewById(R.id.btnStartUrl)
@@ -76,9 +86,23 @@ class MainActivity : AppCompatActivity() {
 
         requestNotificationPermissionIfNeeded()
         refreshModelUi()
+        refreshEngineUi()
         handleIncomingShareIntent(intent)
 
         btnDownloadModel.setOnClickListener { startModelDownload() }
+
+        toggleEngine.addOnButtonCheckedListener { _, checkedId, isChecked ->
+            if (!isChecked) return@addOnButtonCheckedListener
+            val mode = when (checkedId) {
+                R.id.btnModeOnline -> TranscribeSettings.MODE_ONLINE
+                R.id.btnModeOffline -> TranscribeSettings.MODE_OFFLINE
+                else -> return@addOnButtonCheckedListener
+            }
+            TranscribeSettings.setMode(this, mode)
+            refreshEngineUi()
+        }
+
+        btnOnlineSettings.setOnClickListener { showOnlineSettingsDialog() }
 
         btnPaste.setOnClickListener {
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -92,21 +116,21 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnStartUrl.setOnClickListener {
-            if (!ModelManager.isModelReady(this)) {
-                Toast.makeText(this, "请先点击上方按钮下载离线语音模型", Toast.LENGTH_LONG).show()
+            if (!canStartTranscribe()) {
+                Toast.makeText(this, "请先下载离线模型，或在「在线设置」里填写 API Key 后使用在线转写", Toast.LENGTH_LONG).show()
                 return@setOnClickListener
             }
             val raw = etUrl.text.toString().trim()
             if (raw.isEmpty()) {
-                Toast.makeText(this, "请先粘贴小宇宙或 B 站链接", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "请先粘贴小宇宙、B站或小红书链接", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             TranscriberService.startWithUrl(this, raw)
         }
 
         btnPickFile.setOnClickListener {
-            if (!ModelManager.isModelReady(this)) {
-                Toast.makeText(this, "请先点击上方按钮下载离线语音模型", Toast.LENGTH_LONG).show()
+            if (!canStartTranscribe()) {
+                Toast.makeText(this, "请先下载离线模型，或在「在线设置」里填写 API Key 后使用在线转写", Toast.LENGTH_LONG).show()
                 return@setOnClickListener
             }
             pickAudioLauncher.launch(arrayOf("audio/*", "video/*"))
@@ -173,6 +197,140 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "已接收分享链接，点击「开始转录」即可", Toast.LENGTH_SHORT).show()
             }
         }
+    }
+
+    /** 离线模型就绪，或在线模式已配好密钥，都可以开始转录 */
+    private fun canStartTranscribe(): Boolean =
+        ModelManager.isModelReady(this) || TranscribeSettings.isOnlineEnabled(this)
+
+    private fun refreshEngineUi() {
+        val onlineMode = TranscribeSettings.isOnlineMode(this)
+        val key = TranscribeSettings.getApiKey(this)
+        toggleEngine.check(if (onlineMode) R.id.btnModeOnline else R.id.btnModeOffline)
+        tvEngineHint.text = when {
+            !onlineMode ->
+                "当前为本地离线模式：全部在本机转写，需要先下载离线模型"
+            key.isBlank() ->
+                "在线极速模式：请点「在线设置」填写 API Key（免费领取），否则无法在线转写"
+            else ->
+                "在线极速模式已启用：优先用在线接口，断网或不可用时自动转本地离线"
+        }
+    }
+
+    /** 「在线设置」弹窗：API Key、模型预设、自定义接口地址 */
+    private fun showOnlineSettingsDialog() {
+        val padding = (16 * resources.displayMetrics.density).toInt()
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(padding, padding / 2, padding, 0)
+        }
+
+        val tvIntro = TextView(this).apply {
+            text = "在线转写默认使用硅基流动免费接口（SenseVoiceSmall），速度比本地离线快很多，且无需下载 228 MB 模型。"
+            textSize = 13f
+            setTextColor(0xFF4B5563.toInt())
+        }
+        val etApiKey = EditText(this).apply {
+            hint = "粘贴 API Key（sk- 开头）"
+            setText(TranscribeSettings.getApiKey(this@MainActivity))
+            setSingleLine(true)
+            textSize = 14f
+        }
+        val btnGetKey = Button(this).apply {
+            text = "免费领取 Key（硅基流动）"
+            textSize = 13f
+        }
+        btnGetKey.setOnClickListener {
+            startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse(TranscribeSettings.SILICONFLOW_KEY_URL))
+            )
+        }
+
+        val tvModel = TextView(this).apply {
+            text = "模型"
+            textSize = 14f
+            setTextColor(0xFF111827.toInt())
+            setPadding(0, padding / 2, 0, 0)
+        }
+        val rgModel = RadioGroup(this).apply {
+            orientation = RadioGroup.VERTICAL
+        }
+        val rbSense = RadioButton(this).apply {
+            id = View.generateViewId()
+            text = "SenseVoiceSmall（默认，免费）"
+            textSize = 13f
+        }
+        val rbTele = RadioButton(this).apply {
+            id = View.generateViewId()
+            text = "TeleSpeechASR（免费）"
+            textSize = 13f
+        }
+        val rbCustom = RadioButton(this).apply {
+            id = View.generateViewId()
+            text = "自定义模型"
+            textSize = 13f
+        }
+        rgModel.addView(rbSense)
+        rgModel.addView(rbTele)
+        rgModel.addView(rbCustom)
+        val etCustomModel = EditText(this).apply {
+            hint = "输入自定义模型名"
+            setSingleLine(true)
+            textSize = 14f
+            visibility = View.GONE
+        }
+        val etBaseUrl = EditText(this).apply {
+            hint = "API 地址（默认硅基流动，兼容 OpenAI 格式）"
+            setText(TranscribeSettings.getBaseUrl(this@MainActivity))
+            setSingleLine(true)
+            textSize = 14f
+        }
+
+        when (TranscribeSettings.getModel(this)) {
+            TranscribeSettings.MODEL_SENSE_VOICE -> rbSense.isChecked = true
+            TranscribeSettings.MODEL_TELE_SPEECH -> rbTele.isChecked = true
+            else -> {
+                rbCustom.isChecked = true
+                etCustomModel.setText(TranscribeSettings.getModel(this))
+                etCustomModel.visibility = View.VISIBLE
+            }
+        }
+        rgModel.setOnCheckedChangeListener { _, checkedId ->
+            etCustomModel.visibility =
+                if (checkedId == rbCustom.id) View.VISIBLE else View.GONE
+        }
+
+        container.addView(tvIntro)
+        container.addView(etApiKey)
+        container.addView(btnGetKey)
+        container.addView(tvModel)
+        container.addView(rgModel)
+        container.addView(etCustomModel)
+        container.addView(etBaseUrl)
+
+        AlertDialog.Builder(this)
+            .setTitle("在线设置")
+            .setView(container)
+            .setPositiveButton("保存") { _, _ ->
+                val key = etApiKey.text.toString().trim()
+                val model = when {
+                    rbSense.isChecked -> TranscribeSettings.MODEL_SENSE_VOICE
+                    rbTele.isChecked -> TranscribeSettings.MODEL_TELE_SPEECH
+                    else -> etCustomModel.text.toString().trim()
+                        .ifBlank { TranscribeSettings.DEFAULT_MODEL }
+                }
+                TranscribeSettings.setApiKey(this, key)
+                TranscribeSettings.setModel(this, model)
+                TranscribeSettings.setBaseUrl(this, etBaseUrl.text.toString().trim())
+                refreshEngineUi()
+                if (key.isEmpty()) {
+                    Toast.makeText(this, "已保存，未填 API Key 时在线模式不可用", Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(this, "在线设置已保存", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     private fun refreshModelUi() {
