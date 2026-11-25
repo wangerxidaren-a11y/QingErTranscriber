@@ -1,6 +1,7 @@
 package com.erxi.qingertranscriber
 
 import android.Manifest
+import android.bluetooth.BluetoothManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -12,9 +13,11 @@ import android.os.Bundle
 import android.provider.OpenableColumns
 import android.view.View
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -24,8 +27,12 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.button.MaterialButtonToggleGroup
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
@@ -47,6 +54,28 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnShare: Button
     private lateinit var btnHistory: Button
 
+    // v1.3 录音
+    private lateinit var btnRecord: Button
+    private lateinit var btnPauseResume: Button
+    private lateinit var btnMarkHighlight: Button
+    private lateinit var btnRecordings: Button
+    private lateinit var btnTodaySummary: Button
+    private lateinit var tvRecordTimer: TextView
+    private lateinit var tvMicSource: TextView
+    private lateinit var tvRecordStatus: TextView
+    private lateinit var tvLiveTranscript: TextView
+    private lateinit var svLiveTranscript: ScrollView
+    private lateinit var cbDeleteAudio: CheckBox
+
+    private var transcribeRunning = false
+    private var recordingActive = false
+    private var lastRecordError: String? = null
+    private var startRecordingRequested = false
+    private var audioPermAsked = false
+    private var btPermAsked = false
+    private var phonePermAsked = false
+    private var analysisJob: Job? = null
+
     private val pickAudioLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
@@ -59,6 +88,19 @@ class MainActivity : AppCompatActivity() {
     private val notifPermLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { }
+
+    // v1.3 录音权限链：结果回来后继续往下走（见 continueStartRecordingFlow）
+    private val recordAudioLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { if (startRecordingRequested) continueStartRecordingFlow() }
+
+    private val bluetoothLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { if (startRecordingRequested) continueStartRecordingFlow() }
+
+    private val phoneStateLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { if (startRecordingRequested) continueStartRecordingFlow() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -167,16 +209,97 @@ class MainActivity : AppCompatActivity() {
 
         btnHistory.setOnClickListener { showHistoryDialog() }
 
+        // v1.3 录音
+        btnRecord = findViewById(R.id.btnRecord)
+        btnPauseResume = findViewById(R.id.btnPauseResume)
+        btnMarkHighlight = findViewById(R.id.btnMarkHighlight)
+        btnRecordings = findViewById(R.id.btnRecordings)
+        btnTodaySummary = findViewById(R.id.btnTodaySummary)
+        tvRecordTimer = findViewById(R.id.tvRecordTimer)
+        tvMicSource = findViewById(R.id.tvMicSource)
+        tvRecordStatus = findViewById(R.id.tvRecordStatus)
+        tvLiveTranscript = findViewById(R.id.tvLiveTranscript)
+        svLiveTranscript = findViewById(R.id.svLiveTranscript)
+        cbDeleteAudio = findViewById(R.id.cbDeleteAudio)
+
+        cbDeleteAudio.isChecked = TranscribeSettings.isDeleteAudioAfterTranscribe(this)
+        cbDeleteAudio.setOnCheckedChangeListener { _, checked ->
+            TranscribeSettings.setDeleteAudioAfterTranscribe(this, checked)
+            Toast.makeText(
+                this,
+                if (checked) "已开启：新录音转写完成后自动删除原录音，只保留文字" else "已关闭：转写后保留原录音",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+
+        btnRecord.setOnClickListener {
+            if (RecordingService.state.value.isRecording) {
+                RecordingService.stopRecording(this)
+            } else {
+                startRecordingRequested = true
+                audioPermAsked = false
+                btPermAsked = false
+                phonePermAsked = false
+                continueStartRecordingFlow()
+            }
+        }
+
+        btnPauseResume.setOnClickListener {
+            val st = RecordingService.state.value
+            if (st.isPaused) RecordingService.resumeRecording(this) else RecordingService.pauseRecording(this)
+        }
+
+        btnMarkHighlight.setOnClickListener {
+            RecordingService.markHighlight(this)
+            Toast.makeText(this, "已标记重点", Toast.LENGTH_SHORT).show()
+        }
+
+        btnRecordings.setOnClickListener { showRecordingsDialog() }
+
+        btnTodaySummary.setOnClickListener { runTodaySummary() }
+
         lifecycleScope.launch {
             TranscriberService.state.collect { st ->
                 tvTaskStatus.text = st.statusMessage
                 pbTask.progress = st.progress
                 pbTask.visibility = if (st.isRunning || st.progress in 1..99) View.VISIBLE else View.GONE
                 btnStop.visibility = if (st.isRunning) View.VISIBLE else View.GONE
-                btnStartUrl.isEnabled = !st.isRunning
-                btnPickFile.isEnabled = !st.isRunning
+                transcribeRunning = st.isRunning
+                refreshActionButtons()
                 if (st.transcript.isNotBlank()) {
                     tvTranscript.text = st.transcript
+                }
+            }
+        }
+
+        // v1.3：录音状态
+        lifecycleScope.launch {
+            RecordingService.state.collect { st ->
+                recordingActive = st.isRecording
+                refreshActionButtons()
+                tvRecordTimer.text = formatElapsed(st.elapsedSec)
+                tvMicSource.text = if (st.micSource == MicSource.BLUETOOTH) "麦克风：蓝牙耳机" else "麦克风：手机"
+                tvRecordStatus.text = if (st.pendingChunks > 0) {
+                    "${st.statusMessage}（${st.pendingChunks} 段待补转）"
+                } else {
+                    st.statusMessage
+                }
+                if (st.liveTranscript.isNotBlank()) {
+                    tvLiveTranscript.text = st.liveTranscript
+                    svLiveTranscript.post { svLiveTranscript.fullScroll(View.FOCUS_DOWN) }
+                } else {
+                    tvLiveTranscript.text = "录音时转出的文字会实时显示在这里"
+                }
+                btnRecord.text = if (st.isRecording) "停止" else "开始录音"
+                btnPauseResume.visibility = if (st.isRecording) View.VISIBLE else View.GONE
+                btnPauseResume.text = if (st.isPaused) "继续" else "暂停"
+                btnMarkHighlight.visibility = if (st.isRecording) View.VISIBLE else View.GONE
+                val err = st.errorMessage
+                if (!err.isNullOrBlank() && err != lastRecordError) {
+                    lastRecordError = err
+                    Toast.makeText(this@MainActivity, err, Toast.LENGTH_LONG).show()
+                } else if (err.isNullOrBlank()) {
+                    lastRecordError = null
                 }
             }
         }
@@ -342,6 +465,288 @@ class MainActivity : AppCompatActivity() {
             }
         }
         return "本地音频"
+    }
+
+    // ---------- v1.3 录音 ----------
+
+    /** 两个前台任务（链接转录 / 录音）不同时跑，按钮状态统一在这里算 */
+    private fun refreshActionButtons() {
+        val busy = transcribeRunning || recordingActive
+        btnStartUrl.isEnabled = !busy
+        btnPickFile.isEnabled = !busy
+        btnRecord.isEnabled = !transcribeRunning
+    }
+
+    private fun formatElapsed(seconds: Int): String {
+        val h = seconds / 3600
+        val m = (seconds % 3600) / 60
+        val s = seconds % 60
+        return if (h > 0) String.format(Locale.US, "%d:%02d:%02d", h, m, s)
+        else String.format(Locale.US, "%02d:%02d", m, s)
+    }
+
+    /**
+     * 录音启动前的权限链：录音（必需）→ 蓝牙（可选，仅检测耳机）→ 电话状态（可选，仅来电暂停）。
+     * 每项每点一次最多请求一次；蓝牙和电话状态被拒也不影响录音，继续往下走。
+     * 注意：Android 14 要求先拿到录音权限才能启动 microphone 类型的前台服务，所以权限流程必须在启动服务之前完成。
+     */
+    private fun continueStartRecordingFlow() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            if (!audioPermAsked) {
+                audioPermAsked = true
+                AlertDialog.Builder(this)
+                    .setTitle("需要麦克风权限")
+                    .setMessage("应用内录音需要使用麦克风，录音仅用于转写你自己的说话内容。蓝牙耳机录音需要蓝牙权限来检测已连接的耳机，来电自动暂停需要电话状态权限（这两项拒绝也不影响录音）。")
+                    .setPositiveButton("去授权") { _, _ -> recordAudioLauncher.launch(Manifest.permission.RECORD_AUDIO) }
+                    .setNegativeButton("取消") { _, _ -> startRecordingRequested = false }
+                    .show()
+            } else {
+                startRecordingRequested = false
+                Toast.makeText(this, "没有麦克风权限无法录音，请在系统设置中授予后重试", Toast.LENGTH_LONG).show()
+            }
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
+            != PackageManager.PERMISSION_GRANTED && isBluetoothOn() && !btPermAsked
+        ) {
+            btPermAsked = true
+            bluetoothLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+            return
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE)
+            != PackageManager.PERMISSION_GRANTED && !phonePermAsked
+        ) {
+            phonePermAsked = true
+            phoneStateLauncher.launch(Manifest.permission.READ_PHONE_STATE)
+            return
+        }
+        startRecordingRequested = false
+        RecordingService.startRecording(this)
+    }
+
+    private fun isBluetoothOn(): Boolean {
+        val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+        return adapter?.isEnabled == true
+    }
+
+    private fun showRecordingsDialog() {
+        val recordings = RecordingService.listRecordings(this)
+        if (recordings.isEmpty()) {
+            Toast.makeText(this, "暂无录音", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val items = recordings.map { meta ->
+            val statusText = when (meta.status) {
+                "recording" -> "录音中"
+                "transcribing" -> "转写中"
+                "done" -> "已完成"
+                "partial" -> "部分待补转"
+                else -> meta.status
+            }
+            val micText = if (meta.micSource == "bluetooth") "蓝牙" else "手机"
+            val marks = if (meta.highlights.isNotEmpty()) " · ${meta.highlights.size} 个重点" else ""
+            val audioNote = if (meta.audioDeleted) " · 原录音已删" else ""
+            "${meta.title}\n${formatElapsed(meta.durationSec)} · $statusText · $micText$marks$audioNote"
+        }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("录音列表（点击查看）")
+            .setItems(items) { _, which -> showRecordingDetailDialog(recordings[which]) }
+            .setNegativeButton("关闭", null)
+            .show()
+    }
+
+    private fun showRecordingDetailDialog(meta: RecordingMeta) {
+        val transcript = RecordingService.readTranscript(this, meta.id)
+        val padding = (16 * resources.displayMetrics.density).toInt()
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(padding, padding / 2, padding, 0)
+        }
+        val tvDetail = TextView(this).apply {
+            text = transcript.ifBlank { "暂无文稿（可能还在转写中，或录音无有效语音）" }
+            textSize = 14f
+            setTextColor(0xFF374151.toInt())
+            setTextIsSelectable(true)
+        }
+        val scroll = ScrollView(this).apply {
+            addView(tvDetail)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (320 * resources.displayMetrics.density).toInt()
+            )
+        }
+        container.addView(scroll)
+
+        var detailDialog: AlertDialog? = null
+
+        if (meta.pendingChunks > 0) {
+            val btnRetry = Button(this).apply {
+                text = "补转待转分段（${meta.pendingChunks} 段）"
+                textSize = 13f
+            }
+            btnRetry.setOnClickListener {
+                if (RecordingService.state.value.isRecording) {
+                    Toast.makeText(this, "正在录音中，请停止录音后再补转", Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+                RecordingService.retryPending(this, meta.id)
+                Toast.makeText(this, "开始补转，完成后可在文稿中查看", Toast.LENGTH_SHORT).show()
+            }
+            container.addView(btnRetry)
+        }
+        if (meta.hasAnalysis) {
+            val btnViewAnalysis = Button(this).apply {
+                text = "查看已有分析"
+                textSize = 13f
+            }
+            btnViewAnalysis.setOnClickListener {
+                val analysis = RecordingService.readAnalysis(this@MainActivity, meta.id)
+                showTextDialog("AI 分析", analysis.orEmpty())
+            }
+            container.addView(btnViewAnalysis)
+        }
+        val btnDelete = Button(this).apply {
+            text = "删除这条录音"
+            textSize = 13f
+            setTextColor(0xFFDC2626.toInt())
+        }
+        btnDelete.setOnClickListener {
+            AlertDialog.Builder(this@MainActivity)
+                .setTitle("删除录音")
+                .setMessage("确定删除「${meta.title}」吗？录音、文稿和分析都会一起删除。")
+                .setPositiveButton("删除") { _, _ ->
+                    if (RecordingService.deleteRecording(this@MainActivity, meta.id)) {
+                        detailDialog?.dismiss()
+                        Toast.makeText(this@MainActivity, "已删除", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(this@MainActivity, "删除失败", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                .setNegativeButton("取消", null)
+                .show()
+        }
+        container.addView(btnDelete)
+
+        detailDialog = AlertDialog.Builder(this)
+            .setTitle(meta.title)
+            .setView(container)
+            .setPositiveButton("AI 分析") { _, _ -> runRecordingAnalysis(meta) }
+            .setNeutralButton("分享") { _, _ ->
+                if (transcript.isBlank()) {
+                    Toast.makeText(this, "暂无可分享的文稿", Toast.LENGTH_SHORT).show()
+                } else {
+                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, transcript)
+                    }
+                    startActivity(Intent.createChooser(shareIntent, "分享文稿"))
+                }
+            }
+            .setNegativeButton("关闭", null)
+            .create()
+        detailDialog.show()
+    }
+
+    private fun runRecordingAnalysis(meta: RecordingMeta) {
+        if (TranscribeSettings.getApiKey(this).isBlank()) {
+            Toast.makeText(this, "请先在「在线设置」里填写 Groq API Key（免费领取）", Toast.LENGTH_LONG).show()
+            showOnlineSettingsDialog()
+            return
+        }
+        runAnalysisWithProgress("正在分析录音…") { onProgress ->
+            DailyAnalysis.analyzeRecording(this, meta.id, onProgress)
+        }
+    }
+
+    private fun runTodaySummary() {
+        if (TranscribeSettings.getApiKey(this).isBlank()) {
+            Toast.makeText(this, "请先在「在线设置」里填写 Groq API Key（免费领取）", Toast.LENGTH_LONG).show()
+            showOnlineSettingsDialog()
+            return
+        }
+        if (DailyAnalysis.collectTodayTranscript(this).isBlank()) {
+            Toast.makeText(this, "今天还没有录音文稿", Toast.LENGTH_SHORT).show()
+            return
+        }
+        runAnalysisWithProgress("正在生成今日总结…") { onProgress ->
+            DailyAnalysis.analyzeToday(this, onProgress)
+        }
+    }
+
+    /**
+     * 带进度弹窗的分析执行器。分析是阻塞式网络请求，取消时靠 onProgress 回调里的
+     * analysisCancelled 检查在下一个分段边界停下（最长等一次分段调用完成）。
+     */
+    private var analysisCancelled = false
+
+    private fun runAnalysisWithProgress(
+        startMessage: String,
+        task: (onProgress: (Int, String) -> Unit) -> String
+    ) {
+        analysisCancelled = false
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("AI 分析")
+            .setMessage(startMessage)
+            .setCancelable(false)
+            .setNegativeButton("取消") { _, _ ->
+                analysisCancelled = true
+                analysisJob?.cancel()
+            }
+            .create()
+        dialog.show()
+        analysisJob = lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val result = task { _, status ->
+                    if (analysisCancelled) throw kotlinx.coroutines.CancellationException("已取消")
+                    runOnUiThread { if (dialog.isShowing) dialog.setMessage(status) }
+                }
+                withContext(Dispatchers.Main) {
+                    if (dialog.isShowing) dialog.dismiss()
+                    if (analysisCancelled) return@withContext
+                    showTextDialog("AI 分析", result)
+                    Toast.makeText(this@MainActivity, "分析已保存", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // 用户点了取消：预期行为，不提示
+                throw e
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    if (dialog.isShowing) dialog.dismiss()
+                    val msg = e.message ?: "分析失败"
+                    val extra = if (msg.contains("网络") || msg.contains("额度") || msg.contains("不可用")) {
+                        "也可以把文稿发给小墨帮你分析。"
+                    } else ""
+                    Toast.makeText(this@MainActivity, msg + extra, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    private fun showTextDialog(title: String, content: String) {
+        val tv = TextView(this).apply {
+            text = content.ifBlank { "暂无内容" }
+            textSize = 14f
+            setTextColor(0xFF374151.toInt())
+            setTextIsSelectable(true)
+            val padding = (16 * resources.displayMetrics.density).toInt()
+            setPadding(padding, padding / 2, padding, 0)
+        }
+        val scroll = ScrollView(this).apply { addView(tv) }
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setView(scroll)
+            .setPositiveButton("分享") { _, _ ->
+                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, content)
+                }
+                startActivity(Intent.createChooser(shareIntent, "分享"))
+            }
+            .setNegativeButton("关闭", null)
+            .show()
     }
 
     private fun requestNotificationPermissionIfNeeded() {
