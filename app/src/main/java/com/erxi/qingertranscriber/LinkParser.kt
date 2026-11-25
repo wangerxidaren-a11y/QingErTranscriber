@@ -41,7 +41,8 @@ object LinkParser {
             url.contains("bilibili.com", ignoreCase = true) ||
                 url.contains("b23.tv", ignoreCase = true) -> parseBilibili(url)
             url.contains("xiaohongshu.com", ignoreCase = true) ||
-                url.contains("xhslink.com", ignoreCase = true) -> parseXiaohongshu(url)
+                url.contains("xhslink.com", ignoreCase = true) ||
+                url.contains("xhslink.cn", ignoreCase = true) -> parseXiaohongshu(url)
             isDirectMediaUrl(url) -> ParsedMedia(
                 title = url.substringAfterLast('/').substringBefore('?').ifBlank { "在线音频" },
                 audioUrl = url,
@@ -152,7 +153,9 @@ object LinkParser {
     }
 
     private fun parseXiaohongshu(inputUrl: String): ParsedMedia {
-        val resolvedUrl = if (inputUrl.contains("xhslink.com", ignoreCase = true)) {
+        val resolvedUrl = if (inputUrl.contains("xhslink.com", ignoreCase = true) ||
+            inputUrl.contains("xhslink.cn", ignoreCase = true)
+        ) {
             resolveFinalUrl(inputUrl)
         } else {
             inputUrl
