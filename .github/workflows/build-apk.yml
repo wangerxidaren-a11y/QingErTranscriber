@@ -267,19 +267,18 @@ jobs:
 
       - name: Prepare Release APK
         run: |
-          cp app/build/outputs/apk/release/app-release.apk QingErTranscriber-v1.3.2.apk
-          ls -lh QingErTranscriber-v1.3.2.apk
+          cp app/build/outputs/apk/release/app-release.apk QingErTranscriber-v1.3.3.apk
+          ls -lh QingErTranscriber-v1.3.3.apk
 
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.3.2
-          name: 轻耳 v1.3.2（待补转更清晰 + 小红书短链 + 周/月总结）
+          tag_name: v1.3.3
+          name: 轻耳 v1.3.3（小红书下载 403 修复）
           body: |
-            - 待补转分段直接显示在主界面并带补转按钮，打开 App 自动补转
-            - 小红书 xhslink.cn 短链可解析，页面受限时提示保存视频到相册再本地转录
-            - 总结做大：主界面展示今日总结，新增本周/月总结，打开 App 自动生成今日总结
-            - 固定发布签名不变：可直接覆盖升级 v1.3.1
+            - 小红书笔记页被登录墙挡住时不再解析出假地址、提示保存视频到相册再本地转录
+            - 下载改用笔记页作 Referer 并携带页面 Cookie
+            - 固定发布签名不变：可直接覆盖升级 v1.3.2
             - 支持小宇宙单集链接、B 站视频链接（含 b23.tv）、泛用播客链接及本地音视频文件
             - 支持普通话、英语、粤语、日语、韩语自动识别并自动加标点，输出带时间戳的 Markdown 文稿
-          files: QingErTranscriber-v1.3.2.apk
+          files: QingErTranscriber-v1.3.3.apk
