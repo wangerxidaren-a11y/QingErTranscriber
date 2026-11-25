@@ -141,6 +141,8 @@ class MainActivity : AppCompatActivity() {
         btnHistory = findViewById(R.id.btnHistory)
 
         requestNotificationPermissionIfNeeded()
+        // v1.3.5：排期后台任务（每天 21:00 自动总结 + 录音看门狗；KEEP 策略，重复调用不重复排期）
+        QingErWorkers.scheduleAll(this)
         refreshModelUi()
         refreshEngineUi()
         handleIncomingShareIntent(intent)
