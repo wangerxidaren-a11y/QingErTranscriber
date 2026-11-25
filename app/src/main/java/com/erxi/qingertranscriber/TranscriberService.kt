@@ -156,8 +156,6 @@ class TranscriberService : Service() {
             try {
                 val onlineEnabled = TranscribeSettings.isOnlineEnabled(applicationContext)
                 val onlineApiKey = TranscribeSettings.getApiKey(applicationContext)
-                val onlineBaseUrl = TranscribeSettings.getBaseUrl(applicationContext)
-                val onlineModel = TranscribeSettings.getModel(applicationContext)
                 if (!onlineEnabled && !ModelManager.isModelReady(applicationContext)) {
                     throw IllegalStateException("离线模型尚未下载，请先点击顶部「下载离线模型」；也可以在「在线设置」里填写 API Key 后使用在线转写")
                 }
@@ -227,7 +225,7 @@ class TranscriberService : Service() {
                 sb.append("\n")
 
                 var segmentCount = 0
-                // 在线按约 3 分钟静音点分段上传（单段 WAV 约 6 MB，远小于接口 50 MB 上限）；
+                // 在线按约 3 分钟静音点分段上传（单段 WAV 约 6 MB，远小于 Groq 免费版 25 MB 单文件上限）；
                 // 离线沿用 16~26 秒小分段，适配本机模型
                 val minChunkSec = if (onlineEnabled) 150 else 16
                 val maxChunkSec = if (onlineEnabled) 200 else 26
@@ -243,9 +241,7 @@ class TranscriberService : Service() {
                     // 就记一次回退，本段及之后全部改走本地离线引擎
                     if (useOnline) {
                         try {
-                            val segments = OnlineTranscriber.transcribeChunk(
-                                samples, onlineBaseUrl, onlineApiKey, onlineModel
-                            )
+                            val segments = GroqTranscriber.transcribeChunk(samples, onlineApiKey)
                             for (seg in segments) {
                                 segmentCount++
                                 sb.append("[").append(formatTime(startSec + seg.start)).append("] ")
@@ -259,7 +255,7 @@ class TranscriberService : Service() {
                                 transcript = sb.toString()
                             )
                             return@decodeInChunks
-                        } catch (e: OnlineFallbackException) {
+                        } catch (e: GroqFallbackException) {
                             useOnline = false
                             fellBack = true
                             sb.append("\n> ℹ️ ${e.message}，从此处起改用本地离线引擎继续转写\n\n")
