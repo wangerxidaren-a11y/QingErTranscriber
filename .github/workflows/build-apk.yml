@@ -267,17 +267,17 @@ jobs:
 
       - name: Prepare Release APK
         run: |
-          cp app/build/outputs/apk/release/app-release.apk QingErTranscriber-v1.3.4.apk
-          ls -lh QingErTranscriber-v1.3.4.apk
+          cp app/build/outputs/apk/release/app-release.apk QingErTranscriber-v1.3.5.apk
+          ls -lh QingErTranscriber-v1.3.5.apk
 
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.3.4
-          name: 轻耳 v1.3.4（总结按钮挪到上面 + 界面可滚动）
+          tag_name: v1.3.5
+          name: 轻耳 v1.3.5（锁屏通知按钮 + 晚上自动总结 + 被杀自动恢复）
           body: |
-            - 总结的三个按钮挪到总结内容上方，不用划就能点；主界面可整体滚动，小屏幕上也不会再顶出去
-            - 固定发布签名不变：可直接覆盖升级 v1.3.3
+            - 锁屏通知可直接标记重点、暂停/继续、停止；每天 21:00 自动生成今日总结；录音被系统杀掉后自动恢复
+            - 固定发布签名不变：可直接覆盖升级 v1.3.4
             - 支持小宇宙单集链接、B 站视频链接（含 b23.tv）、泛用播客链接及本地音视频文件
             - 支持普通话、英语、粤语、日语、韩语自动识别并自动加标点，输出带时间戳的 Markdown 文稿
-          files: QingErTranscriber-v1.3.4.apk
+          files: QingErTranscriber-v1.3.5.apk
