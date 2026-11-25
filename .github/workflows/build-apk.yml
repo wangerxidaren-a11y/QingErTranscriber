@@ -267,20 +267,20 @@ jobs:
 
       - name: Prepare Release APK
         run: |
-          cp app/build/outputs/apk/release/app-release.apk QingErTranscriber-v1.1.apk
-          ls -lh QingErTranscriber-v1.1.apk
+          cp app/build/outputs/apk/release/app-release.apk QingErTranscriber-v1.2.apk
+          ls -lh QingErTranscriber-v1.2.apk
 
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1
-          name: 清耳转录 v1.1（在线极速 + 小红书支持）
+          tag_name: v1.2
+          name: 清耳转录 v1.2（Groq 在线极速 + 小红书支持）
           body: |
-            - 新增在线极速模式（默认）：硅基流动免费接口（SenseVoiceSmall / TeleSpeechASR），速度比本地离线快很多，无需下载 228 MB 模型；约 3 分钟静音点分段上传，实时输出带 [HH:MM:SS] 时间戳的文稿
-            - 在线优先、自动回退：断网、密钥无效或在线不可用时自动切回本地离线模式，也可一键手动切换；支持自定义 API 地址和模型名（兼容 Groq 等 OpenAI 格式接口）
+            - 在线引擎改用 Groq 免费 Whisper（whisper-large-v3-turbo）：注册只需邮箱或 Google 账号，无需实名；免费额度每天 8 小时音频；速度比本地离线快很多，无需下载 228 MB 模型；约 3 分钟静音点分段上传，实时输出带 [HH:MM:SS] 时间戳的文稿
+            - 在线优先、自动回退：额度用完、断网、密钥无效或在线不可用时自动切回本地离线模式，也可一键手动切换
             - 新增小红书视频转录：支持分享口令、xhslink.com 短链、笔记链接与系统分享导入；个别触发风控的笔记会提示保存到相册后用本地文件转录
             - 本地离线模式不变：开源 Sherpa-ONNX + SenseVoiceSmall（零广告、免登录、完全本地运行）
-            - 固定发布签名：本次起使用固定签名打包，以后可直接覆盖升级
+            - 固定发布签名不变：可直接覆盖升级 v1.1
             - 支持小宇宙单集链接、B 站视频链接（含 b23.tv）、泛用播客链接及本地音视频文件
             - 支持普通话、英语、粤语、日语、韩语自动识别并自动加标点，输出带时间戳的 Markdown 文稿
-          files: QingErTranscriber-v1.1.apk
+          files: QingErTranscriber-v1.2.apk
