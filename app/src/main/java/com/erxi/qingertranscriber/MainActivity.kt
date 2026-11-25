@@ -187,7 +187,7 @@ class MainActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            cm.setPrimaryClip(ClipData.newPlainText("清耳转录文稿", content))
+            cm.setPrimaryClip(ClipData.newPlainText("轻耳文稿", content))
             Toast.makeText(this, "已复制全文（${content.length} 字）", Toast.LENGTH_SHORT).show()
         }
 
