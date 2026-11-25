@@ -7,6 +7,7 @@ object TranscribeSettings {
     private const val PREFS = "qinger_transcribe_prefs"
     private const val KEY_MODE = "transcribe_mode"
     private const val KEY_API_KEY = "online_api_key"
+    private const val KEY_DELETE_AUDIO = "delete_audio_after_transcribe"
 
     /** 在线极速模式（默认） */
     const val MODE_ONLINE = "online"
@@ -46,4 +47,18 @@ object TranscribeSettings {
     /** 在线转写是否可用：在线模式且已填写密钥 */
     fun isOnlineEnabled(context: Context): Boolean =
         isOnlineMode(context) && getApiKey(context).isNotBlank()
+
+    /**
+     * v1.3：转写后删除原录音（只留文字），默认关闭。
+     * 借鉴 OPPO AI 心力球“只留文字、不留原音”的隐私做法：开启后，录音转写全部完成后
+     * 自动删除原录音文件，只保留文稿和分析。
+     */
+    fun isDeleteAudioAfterTranscribe(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_DELETE_AUDIO, false)
+
+    fun setDeleteAudioAfterTranscribe(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_DELETE_AUDIO, enabled).apply()
+    }
 }
