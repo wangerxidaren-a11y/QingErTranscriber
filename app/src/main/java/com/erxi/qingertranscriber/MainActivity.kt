@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
+import android.view.Gravity
 import android.view.View
 import android.widget.Button
 import android.widget.CheckBox
@@ -67,6 +68,16 @@ class MainActivity : AppCompatActivity() {
     private lateinit var svLiveTranscript: ScrollView
     private lateinit var cbDeleteAudio: CheckBox
 
+    // v1.3.2 待补转直显 + 总结卡片
+    private lateinit var llMarkRow: LinearLayout
+    private lateinit var llPendingSection: LinearLayout
+    private lateinit var llPendingList: LinearLayout
+    private lateinit var tvSummaryTitle: TextView
+    private lateinit var tvSummaryPreview: TextView
+    private lateinit var svSummaryPreview: ScrollView
+    private lateinit var btnWeekSummary: Button
+    private lateinit var btnMonthSummary: Button
+
     private var transcribeRunning = false
     private var recordingActive = false
     private var lastRecordError: String? = null
@@ -75,6 +86,11 @@ class MainActivity : AppCompatActivity() {
     private var btPermAsked = false
     private var phonePermAsked = false
     private var analysisJob: Job? = null
+
+    // v1.3.2 自动补转/自动总结：每个录音每打开一次 App 最多自动补转一次；今日总结每会话最多自动生成一次
+    private val autoRetriedIds = mutableSetOf<String>()
+    private var autoSummaryAttempted = false
+    private var autoSummaryJob: Job? = null
 
     private val pickAudioLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -215,6 +231,14 @@ class MainActivity : AppCompatActivity() {
         btnMarkHighlight = findViewById(R.id.btnMarkHighlight)
         btnRecordings = findViewById(R.id.btnRecordings)
         btnTodaySummary = findViewById(R.id.btnTodaySummary)
+        llMarkRow = findViewById(R.id.llMarkRow)
+        llPendingSection = findViewById(R.id.llPendingSection)
+        llPendingList = findViewById(R.id.llPendingList)
+        tvSummaryTitle = findViewById(R.id.tvSummaryTitle)
+        tvSummaryPreview = findViewById(R.id.tvSummaryPreview)
+        svSummaryPreview = findViewById(R.id.svSummaryPreview)
+        btnWeekSummary = findViewById(R.id.btnWeekSummary)
+        btnMonthSummary = findViewById(R.id.btnMonthSummary)
         tvRecordTimer = findViewById(R.id.tvRecordTimer)
         tvMicSource = findViewById(R.id.tvMicSource)
         tvRecordStatus = findViewById(R.id.tvRecordStatus)
@@ -257,6 +281,12 @@ class MainActivity : AppCompatActivity() {
         btnRecordings.setOnClickListener { showRecordingsDialog() }
 
         btnTodaySummary.setOnClickListener { runTodaySummary() }
+        btnWeekSummary.setOnClickListener { runWeekSummary() }
+        btnMonthSummary.setOnClickListener { runMonthSummary() }
+
+        // v1.3.2：进主界面先展示已有的今日总结（没有则由 onResume 自动生成）
+        DailyAnalysis.readTodayAnalysis(this)?.let { showSummaryPreview("今日总结", it) }
+        refreshPendingSection()
 
         lifecycleScope.launch {
             TranscriberService.state.collect { st ->
@@ -293,7 +323,9 @@ class MainActivity : AppCompatActivity() {
                 btnRecord.text = if (st.isRecording) "停止" else "开始录音"
                 btnPauseResume.visibility = if (st.isRecording) View.VISIBLE else View.GONE
                 btnPauseResume.text = if (st.isPaused) "继续" else "暂停"
-                btnMarkHighlight.visibility = if (st.isRecording) View.VISIBLE else View.GONE
+                llMarkRow.visibility = if (st.isRecording) View.VISIBLE else View.GONE
+                // v1.3.2：待补转区随录音状态刷新（内部有签名 guard，内容没变不重建）
+                refreshPendingSection()
                 val err = st.errorMessage
                 if (!err.isNullOrBlank() && err != lastRecordError) {
                     lastRecordError = err
@@ -303,6 +335,14 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // v1.3.2：打开 App 就自动补转待补转分段、自动生成今日总结（失败不打扰）
+        refreshPendingSection()
+        maybeAutoRetryPending()
+        maybeAutoGenerateTodaySummary()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -549,7 +589,7 @@ class MainActivity : AppCompatActivity() {
             val micText = if (meta.micSource == "bluetooth") "蓝牙" else "手机"
             val marks = if (meta.highlights.isNotEmpty()) " · ${meta.highlights.size} 个重点" else ""
             val audioNote = if (meta.audioDeleted) " · 原录音已删" else ""
-            "${meta.title}\n${formatElapsed(meta.durationSec)} · $statusText · $micText$marks$audioNote"
+            "${meta.title}\n${formatElapsed(meta.durationSec)} · $statusText · $micText$marks$audioNote › 点击查看"
         }.toTypedArray()
         AlertDialog.Builder(this)
             .setTitle("录音列表（点击查看）")
@@ -671,8 +711,152 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "今天还没有录音文稿", Toast.LENGTH_SHORT).show()
             return
         }
-        runAnalysisWithProgress("正在生成今日总结…") { onProgress ->
+        autoSummaryJob?.cancel()
+        runAnalysisWithProgress("正在生成今日总结…", onSuccess = { result ->
+            showSummaryPreview("今日总结", result)
+        }) { onProgress ->
             DailyAnalysis.analyzeToday(this, onProgress)
+        }
+    }
+
+    /** v1.3.2：本周总结（过去 7 天，优先用已保存的日分析合并） */
+    private fun runWeekSummary() {
+        if (TranscribeSettings.getApiKey(this).isBlank()) {
+            Toast.makeText(this, "请先在「在线设置」里填写 Groq API Key（免费领取）", Toast.LENGTH_LONG).show()
+            showOnlineSettingsDialog()
+            return
+        }
+        val (startMillis, endMillis) = DailyAnalysis.weekRangeMillis()
+        if (!DailyAnalysis.hasContentInRange(this, startMillis, endMillis)) {
+            Toast.makeText(this, "这段时间没有录音可总结", Toast.LENGTH_SHORT).show()
+            return
+        }
+        autoSummaryJob?.cancel()
+        runAnalysisWithProgress("正在生成本周总结…", onSuccess = { result ->
+            showSummaryPreview("本周总结", result)
+        }) { onProgress ->
+            DailyAnalysis.aggregateWeek(this, onProgress)
+        }
+    }
+
+    /** v1.3.2：本月总结（本月 1 号到今天，优先用已保存的日分析合并） */
+    private fun runMonthSummary() {
+        if (TranscribeSettings.getApiKey(this).isBlank()) {
+            Toast.makeText(this, "请先在「在线设置」里填写 Groq API Key（免费领取）", Toast.LENGTH_LONG).show()
+            showOnlineSettingsDialog()
+            return
+        }
+        val (startMillis, endMillis) = DailyAnalysis.monthRangeMillis()
+        if (!DailyAnalysis.hasContentInRange(this, startMillis, endMillis)) {
+            Toast.makeText(this, "这段时间没有录音可总结", Toast.LENGTH_SHORT).show()
+            return
+        }
+        autoSummaryJob?.cancel()
+        runAnalysisWithProgress("正在生成本月总结…", onSuccess = { result ->
+            showSummaryPreview("本月总结", result)
+        }) { onProgress ->
+            DailyAnalysis.aggregateMonth(this, onProgress)
+        }
+    }
+
+    /** v1.3.2：总结卡片预览显示哪份总结（标题 + 内容，回到顶部） */
+    private fun showSummaryPreview(title: String, content: String) {
+        tvSummaryTitle.text = title
+        tvSummaryPreview.text = content
+        svSummaryPreview.post { svSummaryPreview.fullScroll(View.FOCUS_UP) }
+    }
+
+    private var lastPendingSignature: String? = null
+
+    /** v1.3.2：刷新主界面待补转区；内容没变时不重建（录音状态流每秒都可能推一次） */
+    private fun refreshPendingSection() {
+        val pending = try {
+            RecordingService.listRecordings(this).filter { it.pendingChunks > 0 }
+        } catch (e: Exception) {
+            emptyList()
+        }
+        val signature = pending.joinToString(";") { "${it.id}:${it.pendingChunks}" }
+        val shouldShow = pending.isNotEmpty()
+        if (signature == lastPendingSignature &&
+            llPendingSection.visibility == (if (shouldShow) View.VISIBLE else View.GONE)
+        ) return
+        lastPendingSignature = signature
+        llPendingList.removeAllViews()
+        if (!shouldShow) {
+            llPendingSection.visibility = View.GONE
+            return
+        }
+        llPendingSection.visibility = View.VISIBLE
+        val density = resources.displayMetrics.density
+        for (meta in pending) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                val pad = (6 * density).toInt()
+                setPadding(0, pad, 0, pad)
+            }
+            val tv = TextView(this).apply {
+                text = "${meta.title} · ${meta.pendingChunks} 段待补转"
+                textSize = 13f
+                setTextColor(0xFF374151.toInt())
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val btn = Button(this).apply {
+                text = "补转"
+                textSize = 12f
+            }
+            btn.setOnClickListener {
+                if (RecordingService.state.value.isRecording) {
+                    Toast.makeText(this, "正在录音中，请停止录音后再补转", Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+                RecordingService.retryPending(this, meta.id)
+                Toast.makeText(this, "开始补转，完成后可在文稿中查看", Toast.LENGTH_SHORT).show()
+            }
+            row.addView(tv)
+            row.addView(btn)
+            llPendingList.addView(row)
+        }
+    }
+
+    /** v1.3.2：打开 App 时自动补转待补转分段（仅在线模式、未录音、已填 Key；每打开一次每个录音最多一次；失败保留待补转状态，可手动补转） */
+    private fun maybeAutoRetryPending() {
+        if (RecordingService.state.value.isRecording) return
+        if (!TranscribeSettings.isOnlineMode(this)) return
+        if (TranscribeSettings.getApiKey(this).isBlank()) return
+        val pending = try {
+            RecordingService.listRecordings(this).filter { it.pendingChunks > 0 }
+        } catch (e: Exception) {
+            return
+        }
+        for (meta in pending) {
+            if (meta.id in autoRetriedIds) continue
+            autoRetriedIds.add(meta.id)
+            RecordingService.retryPending(this, meta.id)
+        }
+    }
+
+    /** v1.3.2：打开 App 时自动生成今日总结（今天有文稿、还没日分析时才生成；每会话最多尝试一次；失败只留提示，不打扰） */
+    private fun maybeAutoGenerateTodaySummary() {
+        if (autoSummaryAttempted) return
+        if (DailyAnalysis.readTodayAnalysis(this) != null) return
+        if (DailyAnalysis.collectTodayTranscript(this).isBlank()) return
+        if (TranscribeSettings.getApiKey(this).isBlank()) return
+        autoSummaryAttempted = true
+        tvSummaryTitle.text = "今日总结"
+        tvSummaryPreview.text = "正在生成今日总结…"
+        autoSummaryJob = lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val result = DailyAnalysis.analyzeToday(this@MainActivity) { _, _ -> }
+                withContext(Dispatchers.Main) {
+                    showSummaryPreview("今日总结", result)
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    tvSummaryTitle.text = "今日总结"
+                    tvSummaryPreview.text = "生成失败，点今日总结重试"
+                }
+            }
         }
     }
 
@@ -684,6 +868,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun runAnalysisWithProgress(
         startMessage: String,
+        onSuccess: ((String) -> Unit)? = null,
         task: (onProgress: (Int, String) -> Unit) -> String
     ) {
         analysisCancelled = false
@@ -706,6 +891,7 @@ class MainActivity : AppCompatActivity() {
                 withContext(Dispatchers.Main) {
                     if (dialog.isShowing) dialog.dismiss()
                     if (analysisCancelled) return@withContext
+                    onSuccess?.invoke(result)
                     showTextDialog("AI 分析", result)
                     Toast.makeText(this@MainActivity, "分析已保存", Toast.LENGTH_SHORT).show()
                 }
