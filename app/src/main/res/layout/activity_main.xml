@@ -1,11 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="#F6F7FB"
-    android:orientation="vertical"
-    android:padding="16dp">
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
 
     <TextView
         android:layout_width="match_parent"
@@ -437,24 +442,6 @@
                         android:textSize="12sp" />
                 </LinearLayout>
 
-                <ScrollView
-                    android:id="@+id/svSummaryPreview"
-                    android:layout_width="match_parent"
-                    android:layout_height="120dp"
-                    android:layout_marginTop="4dp"
-                    android:background="#F3F4F6">
-
-                    <TextView
-                        android:id="@+id/tvSummaryPreview"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:padding="10dp"
-                        android:text="还没有今日总结"
-                        android:textColor="#6B7280"
-                        android:textIsSelectable="true"
-                        android:textSize="13sp" />
-                </ScrollView>
-
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -489,6 +476,24 @@
                         android:text="本月总结"
                         android:textSize="12sp" />
                 </LinearLayout>
+
+                <ScrollView
+                    android:id="@+id/svSummaryPreview"
+                    android:layout_width="match_parent"
+                    android:layout_height="120dp"
+                    android:layout_marginTop="4dp"
+                    android:background="#F3F4F6">
+
+                    <TextView
+                        android:id="@+id/tvSummaryPreview"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:padding="10dp"
+                        android:text="还没有今日总结"
+                        android:textColor="#6B7280"
+                        android:textIsSelectable="true"
+                        android:textSize="13sp" />
+                </ScrollView>
             </LinearLayout>
 
             <CheckBox
@@ -505,8 +510,7 @@
     <!-- 文稿预览区 -->
     <com.google.android.material.card.MaterialCardView
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
+        android:layout_height="220dp"
         app:cardBackgroundColor="#FFFFFF"
         app:cardCornerRadius="14dp"
         app:cardElevation="1dp"
@@ -577,4 +581,5 @@
             </ScrollView>
         </LinearLayout>
     </com.google.android.material.card.MaterialCardView>
-</LinearLayout>
+    </LinearLayout>
+</androidx.core.widget.NestedScrollView>
