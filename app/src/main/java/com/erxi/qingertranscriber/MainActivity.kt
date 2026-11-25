@@ -15,8 +15,6 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ProgressBar
-import android.widget.RadioButton
-import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -217,7 +215,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 「在线设置」弹窗：API Key、模型预设、自定义接口地址 */
+    /** 「在线设置」弹窗：Groq API Key */
     private fun showOnlineSettingsDialog() {
         val padding = (16 * resources.displayMetrics.density).toInt()
         val container = LinearLayout(this).apply {
@@ -226,102 +224,36 @@ class MainActivity : AppCompatActivity() {
         }
 
         val tvIntro = TextView(this).apply {
-            text = "在线转写默认使用硅基流动免费接口（SenseVoiceSmall），速度比本地离线快很多，且无需下载 228 MB 模型。"
+            text = "在线转写使用 Groq 免费 Whisper 接口（whisper-large-v3-turbo），速度比本地离线快很多，且无需下载 228 MB 模型。免费额度每天 8 小时音频；注册只需邮箱或 Google 账号，无需实名。"
             textSize = 13f
             setTextColor(0xFF4B5563.toInt())
         }
         val etApiKey = EditText(this).apply {
-            hint = "粘贴 API Key（sk- 开头）"
+            hint = "粘贴 Groq API Key（gsk- 开头）"
             setText(TranscribeSettings.getApiKey(this@MainActivity))
             setSingleLine(true)
             textSize = 14f
         }
         val btnGetKey = Button(this).apply {
-            text = "免费领取 Key（硅基流动）"
+            text = "免费领取 Key（Groq）"
             textSize = 13f
         }
         btnGetKey.setOnClickListener {
             startActivity(
-                Intent(Intent.ACTION_VIEW, Uri.parse(TranscribeSettings.SILICONFLOW_KEY_URL))
+                Intent(Intent.ACTION_VIEW, Uri.parse(TranscribeSettings.GROQ_KEY_URL))
             )
-        }
-
-        val tvModel = TextView(this).apply {
-            text = "模型"
-            textSize = 14f
-            setTextColor(0xFF111827.toInt())
-            setPadding(0, padding / 2, 0, 0)
-        }
-        val rgModel = RadioGroup(this).apply {
-            orientation = RadioGroup.VERTICAL
-        }
-        val rbSense = RadioButton(this).apply {
-            id = View.generateViewId()
-            text = "SenseVoiceSmall（默认，免费）"
-            textSize = 13f
-        }
-        val rbTele = RadioButton(this).apply {
-            id = View.generateViewId()
-            text = "TeleSpeechASR（免费）"
-            textSize = 13f
-        }
-        val rbCustom = RadioButton(this).apply {
-            id = View.generateViewId()
-            text = "自定义模型"
-            textSize = 13f
-        }
-        rgModel.addView(rbSense)
-        rgModel.addView(rbTele)
-        rgModel.addView(rbCustom)
-        val etCustomModel = EditText(this).apply {
-            hint = "输入自定义模型名"
-            setSingleLine(true)
-            textSize = 14f
-            visibility = View.GONE
-        }
-        val etBaseUrl = EditText(this).apply {
-            hint = "API 地址（默认硅基流动，兼容 OpenAI 格式）"
-            setText(TranscribeSettings.getBaseUrl(this@MainActivity))
-            setSingleLine(true)
-            textSize = 14f
-        }
-
-        when (TranscribeSettings.getModel(this)) {
-            TranscribeSettings.MODEL_SENSE_VOICE -> rbSense.isChecked = true
-            TranscribeSettings.MODEL_TELE_SPEECH -> rbTele.isChecked = true
-            else -> {
-                rbCustom.isChecked = true
-                etCustomModel.setText(TranscribeSettings.getModel(this))
-                etCustomModel.visibility = View.VISIBLE
-            }
-        }
-        rgModel.setOnCheckedChangeListener { _, checkedId ->
-            etCustomModel.visibility =
-                if (checkedId == rbCustom.id) View.VISIBLE else View.GONE
         }
 
         container.addView(tvIntro)
         container.addView(etApiKey)
         container.addView(btnGetKey)
-        container.addView(tvModel)
-        container.addView(rgModel)
-        container.addView(etCustomModel)
-        container.addView(etBaseUrl)
 
         AlertDialog.Builder(this)
             .setTitle("在线设置")
             .setView(container)
             .setPositiveButton("保存") { _, _ ->
                 val key = etApiKey.text.toString().trim()
-                val model = when {
-                    rbSense.isChecked -> TranscribeSettings.MODEL_SENSE_VOICE
-                    rbTele.isChecked -> TranscribeSettings.MODEL_TELE_SPEECH
-                    else -> etCustomModel.text.toString().trim()
-                        .ifBlank { TranscribeSettings.DEFAULT_MODEL }
-                }
                 TranscribeSettings.setApiKey(this, key)
-                TranscribeSettings.setModel(this, model)
-                TranscribeSettings.setBaseUrl(this, etBaseUrl.text.toString().trim())
                 refreshEngineUi()
                 if (key.isEmpty()) {
                     Toast.makeText(this, "已保存，未填 API Key 时在线模式不可用", Toast.LENGTH_LONG).show()
