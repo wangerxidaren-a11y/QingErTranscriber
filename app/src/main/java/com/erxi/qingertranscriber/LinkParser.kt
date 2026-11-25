@@ -1,5 +1,8 @@
 package com.erxi.qingertranscriber
 
+import okhttp3.Cookie
+import okhttp3.CookieJar
+import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
@@ -20,11 +23,23 @@ object LinkParser {
     private const val DESKTOP_UA =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 
+    // 内存 CookieJar：拉笔记页时拿到的 Cookie 需要带到后续的 CDN 下载请求上，
+    // 否则小红书 CDN 可能直接 403。本客户端只拉媒体站页面、只下载媒体文件。
+    private val cookieJar = object : CookieJar {
+        private val cookies = mutableListOf<Cookie>()
+        override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
+            this.cookies.removeAll { old -> cookies.any { it.name == old.name } }
+            this.cookies.addAll(cookies)
+        }
+        override fun loadForRequest(url: HttpUrl): List<Cookie> = cookies.toList()
+    }
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .followRedirects(true)
         .followSslRedirects(true)
+        .cookieJar(cookieJar)
         .build()
 
     fun extractFirstUrl(rawText: String): String? {
@@ -166,15 +181,31 @@ object LinkParser {
             ?: throw IllegalArgumentException("未识别到小红书笔记链接，请复制笔记详情页、分享口令或短链")
 
         val pageUrl = "https://www.xiaohongshu.com/explore/$noteId"
+        // 下载时用笔记详情页作 Referer（不用首页），否则 CDN 可能拦。
         val xhsHeaders = mapOf(
             "User-Agent" to DESKTOP_UA,
-            "Referer" to "https://www.xiaohongshu.com/"
+            "Referer" to pageUrl
         )
         val html = try {
             fetchText(pageUrl, xhsHeaders)
         } catch (e: IllegalStateException) {
             throw IllegalStateException(
                 "小红书页面请求受限（可能触发风控），请在小红书里把视频保存到相册，然后用「选择本地文件」转录"
+            )
+        }
+
+        // 登录墙检测：无登录态时小红书返回登录页（通用标题、无 __INITIAL_STATE__，
+        // 页面里没有任何视频地址）。不拦下来，后面的兜底正则会把登录页 JS 里的
+        // 裸 CDN 域名当成视频地址，下载时 CDN 回 403。
+        val pageTitle = Regex("""<title>([^<]+)</title>""", RegexOption.IGNORE_CASE)
+            .find(html)?.groupValues?.get(1)?.trim().orEmpty()
+        val isLoginWall = !html.contains("__INITIAL_STATE__") &&
+            (pageTitle == "小红书 - 你的生活兴趣社区" ||
+                (html.contains("login", ignoreCase = true) &&
+                    (html.contains("登录") || html.contains("扫码"))))
+        if (isLoginWall) {
+            throw IllegalStateException(
+                "小红书页面需要登录或受限，无法直接解析：请在小红书里把视频保存到相册，再用「本地文件」转录"
             )
         }
 
@@ -202,7 +233,9 @@ object LinkParser {
             ?: Regex("""<meta\s+property=["']og:video["']\s+content=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
                 .find(html)?.groupValues?.get(1)
             ?: Regex("""https://[^"'\\\s]*xhscdn\.com[^"'\\\s]*\.mp4[^"'\\\s]*""").find(html)?.value
-            ?: Regex("""https://sns-video-[^"'\\\s]+""").find(html)?.value
+            // 兜底：域名后必须有路径，裸域名（如登录页 JS 里的 https://sns-video-qc.xhscdn.com）
+            // 绝不能被当成视频地址。
+            ?: Regex("""https://sns-video-[^"'\\\s]+/[^"'\\\s]+""").find(html)?.value
             ?: throw IllegalStateException(
                 "该笔记无法解析出视频地址（图文笔记没有视频，或触发了小红书风控），" +
                     "请在小红书里把视频保存到相册，然后用「选择本地文件」转录"
