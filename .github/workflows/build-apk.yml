@@ -267,22 +267,19 @@ jobs:
 
       - name: Prepare Release APK
         run: |
-          cp app/build/outputs/apk/release/app-release.apk QingErTranscriber-v1.3.apk
-          ls -lh QingErTranscriber-v1.3.apk
+          cp app/build/outputs/apk/release/app-release.apk QingErTranscriber-v1.3.1.apk
+          ls -lh QingErTranscriber-v1.3.1.apk
 
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.3
-          name: 清耳转录 v1.3（应用内录音 + 蓝牙 + AI 日分析）
+          tag_name: v1.3.1
+          name: 轻耳 v1.3.1（改名）
           body: |
-            - 应用内实时录音 + 边录边转：应用内直接录音（16kHz 单声道），约 60 秒一段边录边转，实时出带时间戳的文稿；复用在线优先、断网回退离线的引擎策略；录音和识别分开，断网时分段排队、之后补转；来电自动暂停
-            - 蓝牙耳机录音：蓝牙耳机已连接时自动走蓝牙 SCO 录音，否则用手机麦克风；界面显示当前麦克风来源
-            - 重点标记：录音中点一下「标记重点」，给当前时间点打标记，在文稿时间线里一眼能找到（体验参考 OPPO AI 心力球）
-            - AI 日分析：用同一个 Groq API Key 调 openai/gpt-oss-120b（免费 tier），对当天文稿生成结构化摘要：重要观点、待办事项、做出的决定、值得记住的事；输出 Markdown，App 内保存、可查看、可分享
-                    - 隐私选项：可开启「转写后删除原录音（只留文字）」，默认关闭
-                            - 在线引擎 Groq Whisper 不变：免费额度每天 8 小时音频；小红书视频转录、本地离线模式不变
-            - 固定发布签名不变：可直接覆盖升级 v1.2
+            - 改名：App 正式改名为「轻耳」（原名清耳转录），桌面图标、通知、界面标题统一改名
+            - 功能与 v1.3 完全一致
+            - 固定发布签名不变：可直接覆盖升级 v1.3
+
             - 支持小宇宙单集链接、B 站视频链接（含 b23.tv）、泛用播客链接及本地音视频文件
             - 支持普通话、英语、粤语、日语、韩语自动识别并自动加标点，输出带时间戳的 Markdown 文稿
-          files: QingErTranscriber-v1.3.apk
+          files: QingErTranscriber-v1.3.1.apk
