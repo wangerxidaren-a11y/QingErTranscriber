@@ -61,6 +61,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnMarkHighlight: Button
     private lateinit var btnRecordings: Button
     private lateinit var btnTodaySummary: Button
+    private lateinit var btnSummarizeLatest: Button
     private lateinit var tvRecordTimer: TextView
     private lateinit var tvMicSource: TextView
     private lateinit var tvRecordStatus: TextView
@@ -233,6 +234,7 @@ class MainActivity : AppCompatActivity() {
         btnMarkHighlight = findViewById(R.id.btnMarkHighlight)
         btnRecordings = findViewById(R.id.btnRecordings)
         btnTodaySummary = findViewById(R.id.btnTodaySummary)
+        btnSummarizeLatest = findViewById(R.id.btnSummarizeLatest)
         llMarkRow = findViewById(R.id.llMarkRow)
         llPendingSection = findViewById(R.id.llPendingSection)
         llPendingList = findViewById(R.id.llPendingList)
@@ -285,10 +287,12 @@ class MainActivity : AppCompatActivity() {
         btnTodaySummary.setOnClickListener { runTodaySummary() }
         btnWeekSummary.setOnClickListener { runWeekSummary() }
         btnMonthSummary.setOnClickListener { runMonthSummary() }
+        btnSummarizeLatest.setOnClickListener { runLatestConversationSummary() }
 
         // v1.3.2：进主界面先展示已有的今日总结（没有则由 onResume 自动生成）
         DailyAnalysis.readTodayAnalysis(this)?.let { showSummaryPreview("今日总结", it) }
         refreshPendingSection()
+        refreshSummarizeLatestButton()
 
         lifecycleScope.launch {
             TranscriberService.state.collect { st ->
@@ -326,6 +330,8 @@ class MainActivity : AppCompatActivity() {
                 btnPauseResume.visibility = if (st.isRecording) View.VISIBLE else View.GONE
                 btnPauseResume.text = if (st.isPaused) "继续" else "暂停"
                 llMarkRow.visibility = if (st.isRecording) View.VISIBLE else View.GONE
+                // v1.3.6：「总结这次对话」按钮随录音状态刷新
+                refreshSummarizeLatestButton()
                 // v1.3.2：待补转区随录音状态刷新（内部有签名 guard，内容没变不重建）
                 refreshPendingSection()
                 val err = st.errorMessage
@@ -345,6 +351,7 @@ class MainActivity : AppCompatActivity() {
         refreshPendingSection()
         maybeAutoRetryPending()
         maybeAutoGenerateTodaySummary()
+        refreshSummarizeLatestButton()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -692,14 +699,62 @@ class MainActivity : AppCompatActivity() {
         detailDialog.show()
     }
 
-    private fun runRecordingAnalysis(meta: RecordingMeta) {
+    private fun runRecordingAnalysis(meta: RecordingMeta, onSuccess: ((String) -> Unit)? = null) {
         if (TranscribeSettings.getApiKey(this).isBlank()) {
             Toast.makeText(this, "请先在「在线设置」里填写 Groq API Key（免费领取）", Toast.LENGTH_LONG).show()
             showOnlineSettingsDialog()
             return
         }
-        runAnalysisWithProgress("正在分析录音…") { onProgress ->
+        runAnalysisWithProgress("正在分析录音…", onSuccess = onSuccess) { onProgress ->
             DailyAnalysis.analyzeRecording(this, meta.id, onProgress)
+        }
+    }
+
+    /** v1.3.6：刷新「总结这次对话」按钮；录音进行中不显示，最新录音没有文稿时隐藏 */
+    private fun refreshSummarizeLatestButton() {
+        if (RecordingService.state.value.isRecording) {
+            btnSummarizeLatest.visibility = View.GONE
+            return
+        }
+        val latest = try {
+            RecordingService.listRecordings(this).firstOrNull()
+        } catch (e: Exception) {
+            null
+        }
+        val hasTranscript = latest != null && try {
+            RecordingService.readTranscript(this, latest.id).isNotBlank()
+        } catch (e: Exception) {
+            false
+        }
+        btnSummarizeLatest.visibility = if (hasTranscript) View.VISIBLE else View.GONE
+    }
+
+    /** v1.3.6：总结最新一次对话（录音停止后主界面卡片上的按钮）；复用单条录音分析，结果显示在总结预览区 */
+    private fun runLatestConversationSummary() {
+        if (RecordingService.state.value.isRecording) {
+            Toast.makeText(this, "正在录音中，请停止录音后再总结", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val latest = try {
+            RecordingService.listRecordings(this).firstOrNull()
+        } catch (e: Exception) {
+            null
+        }
+        if (latest == null) {
+            Toast.makeText(this, "暂无录音", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val transcript = try {
+            RecordingService.readTranscript(this, latest.id)
+        } catch (e: Exception) {
+            ""
+        }
+        if (transcript.isBlank()) {
+            Toast.makeText(this, "最新录音暂无文稿，稍后再试", Toast.LENGTH_SHORT).show()
+            return
+        }
+        runRecordingAnalysis(latest) { result ->
+            showSummaryPreview("本次对话总结", result)
         }
     }
 
