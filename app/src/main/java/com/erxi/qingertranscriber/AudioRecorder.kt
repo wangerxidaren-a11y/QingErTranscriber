@@ -171,7 +171,7 @@ class AudioRecorder(
                         AudioFormat.ENCODING_PCM_16BIT, bufferSize
                     )
                 } catch (e: SecurityException) {
-                    throw IllegalStateException("未获得录音权限，请在设置中允许清耳转录使用麦克风")
+                    throw IllegalStateException("未获得录音权限，请在设置中允许轻耳使用麦克风")
                 } catch (e: IllegalArgumentException) {
                     throw IllegalStateException("当前设备不支持录音（录音参数无效）")
                 }
