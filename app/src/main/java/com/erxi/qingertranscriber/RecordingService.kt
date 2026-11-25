@@ -19,10 +19,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -485,7 +487,7 @@ class RecordingService : Service() {
     private suspend fun runTranscribeWorker() {
         try {
             for (pending in transcribeChannel) {
-                if (!isActive) break
+                if (currentCoroutineContext()[Job]?.isActive != true) break
                 transcribeOneChunk(pending)
             }
         } catch (e: CancellationException) {
