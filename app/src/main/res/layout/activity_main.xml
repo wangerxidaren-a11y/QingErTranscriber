@@ -326,7 +326,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:lineSpacingExtra="5dp"
-                    android:text="转写结果会实时显示在这里，并自动保存为 Markdown 文稿。\n\n小提示：\n1. 在小宇宙、B 站或小红书点击「分享 → 复制链接」，直接粘贴到上方即可。\n2. 也可以在分享菜单里直接选择「清耳转录」。\n3. 转写长播客时可以锁屏后台运行，建议在小米设置中将本应用省电策略设为「无限制」。\n4. 在线极速模式（硅基流动免费接口）速度比本地离线快很多，断网时可一键切回本地离线。"
+                    android:text="转写结果会实时显示在这里，并自动保存为 Markdown 文稿。\n\n小提示：\n1. 在小宇宙、B 站或小红书点击「分享 → 复制链接」，直接粘贴到上方即可。\n2. 也可以在分享菜单里直接选择「清耳转录」。\n3. 转写长播客时可以锁屏后台运行，建议在小米设置中将本应用省电策略设为「无限制」。\n4. 在线极速模式（Groq 免费接口，每天 8 小时）速度比本地离线快很多，断网时可一键切回本地离线。"
                     android:textColor="#374151"
                     android:textIsSelectable="true"
                     android:textSize="14sp" />
