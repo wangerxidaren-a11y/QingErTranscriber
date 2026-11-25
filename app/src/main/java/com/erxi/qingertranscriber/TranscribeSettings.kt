@@ -7,8 +7,6 @@ object TranscribeSettings {
     private const val PREFS = "qinger_transcribe_prefs"
     private const val KEY_MODE = "transcribe_mode"
     private const val KEY_API_KEY = "online_api_key"
-    private const val KEY_BASE_URL = "online_base_url"
-    private const val KEY_MODEL = "online_model"
 
     /** 在线极速模式（默认） */
     const val MODE_ONLINE = "online"
@@ -16,16 +14,13 @@ object TranscribeSettings {
     /** 本地离线模式 */
     const val MODE_OFFLINE = "offline"
 
-    /** 默认接口：硅基流动（OpenAI 兼容格式） */
-    const val DEFAULT_BASE_URL = "https://api.siliconflow.cn/v1"
+    /** 在线引擎：Groq Whisper（whisper-large-v3-turbo），免费额度每天 8 小时音频 */
+    const val ONLINE_MODEL = "whisper-large-v3-turbo"
 
-    /** 免费推荐模型预设 */
-    const val MODEL_SENSE_VOICE = "FunAudioLLM/SenseVoiceSmall"
-    const val MODEL_TELE_SPEECH = "TeleAI/TeleSpeechASR"
-    const val DEFAULT_MODEL = MODEL_SENSE_VOICE
+    /** Groq 免费领 Key 入口：邮箱或 Google 注册即可，无需实名 */
+    const val GROQ_KEY_URL = "https://console.groq.com"
 
-    /** 硅基流动免费领 Key 入口 */
-    const val SILICONFLOW_KEY_URL = "https://cloud.siliconflow.cn/account/ak"
+    // 注：v1.1 留下的 online_base_url / online_model 偏好在 v1.2 起不再读取（在线引擎固定为 Groq）。
 
     fun getMode(context: Context): String =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -46,26 +41,6 @@ object TranscribeSettings {
     fun setApiKey(context: Context, key: String) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit().putString(KEY_API_KEY, key.trim()).apply()
-    }
-
-    fun getBaseUrl(context: Context): String =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_BASE_URL, DEFAULT_BASE_URL)
-            ?.ifBlank { DEFAULT_BASE_URL } ?: DEFAULT_BASE_URL
-
-    fun setBaseUrl(context: Context, url: String) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putString(KEY_BASE_URL, url.trim().ifBlank { DEFAULT_BASE_URL }).apply()
-    }
-
-    fun getModel(context: Context): String =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_MODEL, DEFAULT_MODEL)
-            ?.ifBlank { DEFAULT_MODEL } ?: DEFAULT_MODEL
-
-    fun setModel(context: Context, model: String) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putString(KEY_MODEL, model.trim().ifBlank { DEFAULT_MODEL }).apply()
     }
 
     /** 在线转写是否可用：在线模式且已填写密钥 */
