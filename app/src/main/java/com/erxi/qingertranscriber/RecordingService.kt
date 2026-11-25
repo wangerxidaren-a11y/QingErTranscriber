@@ -90,6 +90,20 @@ class RecordingService : Service() {
         const val ACTION_RETRY = "ACTION_RETRY_PENDING"
         const val EXTRA_RECORDING_ID = "EXTRA_RECORDING_ID"
 
+        // v1.3.5：录音进行中标志（持久化在 SharedPreferences）。
+        // 用户主动停止时清除；进程被系统杀掉时保留，供看门狗恢复录音。
+        private const val RECORD_PREFS = "qinger_recording_prefs"
+        private const val KEY_RECORDING_ACTIVE = "recording_active"
+
+        fun isRecordingActive(context: Context): Boolean =
+            context.getSharedPreferences(RECORD_PREFS, Context.MODE_PRIVATE)
+                .getBoolean(KEY_RECORDING_ACTIVE, false)
+
+        fun setRecordingActive(context: Context, active: Boolean) {
+            context.getSharedPreferences(RECORD_PREFS, Context.MODE_PRIVATE)
+                .edit().putBoolean(KEY_RECORDING_ACTIVE, active).apply()
+        }
+
         private val _state = MutableStateFlow(RecordingState())
         val state: StateFlow<RecordingState> = _state.asStateFlow()
 
@@ -271,6 +285,8 @@ class RecordingService : Service() {
                 }
             }
             ACTION_STOP -> {
+                // v1.3.5：用户主动停止，清除"录音进行中"标志，看门狗绝不重启
+                setRecordingActive(this, false)
                 serviceScope.launch { stopRecordingInternal() }
             }
             ACTION_MARK -> {
@@ -325,13 +341,43 @@ class RecordingService : Service() {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("轻耳·录音")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentIntent(pi)
+            // v1.3.5：锁屏上也显示内容和操作按钮
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOngoing(true)
-            .build()
+        val st = _state.value
+        if (st.isRecording) {
+            // v1.3.5：锁屏通知操作按钮（与 App 内同一逻辑，点通知按钮直接发回本服务）
+            val markPi = PendingIntent.getService(
+                this, 1,
+                Intent(this, RecordingService::class.java).apply { action = ACTION_MARK },
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            builder.addAction(android.R.drawable.star_on, "⭐ 标记", markPi)
+            val pauseResumePi = PendingIntent.getService(
+                this, 2,
+                Intent(this, RecordingService::class.java).apply {
+                    action = if (st.isPaused) ACTION_RESUME else ACTION_PAUSE
+                },
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            builder.addAction(
+                if (st.isPaused) android.R.drawable.ic_media_play else android.R.drawable.ic_media_pause,
+                if (st.isPaused) "继续" else "暂停",
+                pauseResumePi
+            )
+            val stopPi = PendingIntent.getService(
+                this, 3,
+                Intent(this, RecordingService::class.java).apply { action = ACTION_STOP },
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "停止", stopPi)
+        }
+        return builder.build()
     }
 
     private fun acquireWakeLock() {
@@ -422,6 +468,8 @@ class RecordingService : Service() {
             val actualSource = if (rec.micSource == MicSource.BLUETOOTH) "bluetooth" else "phone"
             currentMeta = currentMeta?.copy(micSource = actualSource)
             currentMeta?.let { writeMeta(it) }
+            // v1.3.5：录音真正开始后才置位"录音进行中"标志（启动失败不置位）
+            setRecordingActive(this, true)
             updateState(
                 status = if (rec.micSource == MicSource.BLUETOOTH) "正在录音（蓝牙耳机）…" else "正在录音…",
                 micSource = rec.micSource
