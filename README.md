@@ -1,4 +1,4 @@
-# 清耳转录（QingEr Transcriber）
+# 轻耳（QingEr Transcriber）
 
 专为小米手机（arm64-v8a，适配小米 14 / 小米 17 等澎湃 OS 机型）打造的**零广告、纯开源**音视频转录工具，支持在线与本地双引擎一键切换。
 
