@@ -63,4 +63,6 @@ dependencies {
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // v1.3.5：WorkManager（每天 21:00 自动总结 + 录音看门狗，无需精确闹钟权限）
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
 }
