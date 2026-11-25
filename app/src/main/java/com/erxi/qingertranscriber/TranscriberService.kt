@@ -13,11 +13,6 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
-import com.k2fsa.sherpa.onnx.FeatureConfig
-import com.k2fsa.sherpa.onnx.OfflineModelConfig
-import com.k2fsa.sherpa.onnx.OfflineRecognizer
-import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
-import com.k2fsa.sherpa.onnx.OfflineSenseVoiceModelConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -152,7 +147,8 @@ class TranscriberService : Service() {
 
         currentJob = serviceScope.launch {
             var tempAudioFile: File? = null
-            var recognizer: OfflineRecognizer? = null
+            // 离线引擎按需加载：纯在线任务不加载模型；在线失败回退时才加载
+            val offlineTranscriber = OfflineTranscriber(applicationContext)
             try {
                 val onlineEnabled = TranscribeSettings.isOnlineEnabled(applicationContext)
                 val onlineApiKey = TranscribeSettings.getApiKey(applicationContext)
@@ -184,33 +180,8 @@ class TranscriberService : Service() {
 
                 if (cancelled) return@launch
 
-                // 离线引擎按需加载：纯在线任务不加载模型；在线失败回退时才加载
                 var useOnline = onlineEnabled
                 var fellBack = false
-                fun ensureOfflineRecognizer(): OfflineRecognizer {
-                    recognizer?.let { return it }
-                    if (!ModelManager.isModelReady(applicationContext)) {
-                        throw IllegalStateException("离线模型尚未下载，请先点击顶部「下载离线模型」")
-                    }
-                    updateState(isRunning = true, status = "正在加载离线语音大模型（SenseVoice）…")
-                    val threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 6)
-                    val config = OfflineRecognizerConfig(
-                        featConfig = FeatureConfig(sampleRate = 16000, featureDim = 80),
-                        modelConfig = OfflineModelConfig(
-                            senseVoice = OfflineSenseVoiceModelConfig(
-                                model = ModelManager.getModelFile(applicationContext).absolutePath,
-                                language = "",
-                                useInverseTextNormalization = true
-                            ),
-                            tokens = ModelManager.getTokensFile(applicationContext).absolutePath,
-                            numThreads = threads,
-                            provider = "cpu"
-                        )
-                    )
-                    val created = OfflineRecognizer(assetManager = null, config = config)
-                    recognizer = created
-                    return created
-                }
 
                 if (useOnline) {
                     updateState(isRunning = true, status = "正在准备在线转写…", progress = 26)
@@ -267,18 +238,15 @@ class TranscriberService : Service() {
                         }
                     }
 
-                    val offlineRecognizer = ensureOfflineRecognizer()
-                    val stream = offlineRecognizer.createStream()
-                    try {
-                        stream.acceptWaveform(samples, 16000)
-                        offlineRecognizer.decode(stream)
-                        val text = offlineRecognizer.getResult(stream).text.trim()
-                        if (text.isNotEmpty()) {
-                            segmentCount++
-                            sb.append("[").append(formatTime(startSec)).append("] ").append(text).append("\n\n")
-                        }
-                    } finally {
-                        stream.release()
+                    // 首次加载前提示一次（与 v1.2 行为一致：模型未就绪时不提示，直接抛错）
+                    if (!offlineTranscriber.isLoaded && ModelManager.isModelReady(applicationContext)) {
+                        updateState(isRunning = true, status = "正在加载离线语音大模型（SenseVoice）…")
+                    }
+                    offlineTranscriber.ensureLoaded()
+                    val text = offlineTranscriber.transcribe(samples)
+                    if (text.isNotEmpty()) {
+                        segmentCount++
+                        sb.append("[").append(formatTime(startSec)).append("] ").append(text).append("\n\n")
                     }
                     val overallPct = 28 + (fraction * 70f).toInt()
                     val engineLabel = if (fellBack) "本地离线转写中（在线不可用，已处理至" else "本地离线转写中（已处理至"
@@ -314,7 +282,7 @@ class TranscriberService : Service() {
                     )
                 }
             } finally {
-                recognizer?.release()
+                offlineTranscriber.release()
                 tempAudioFile?.delete()
                 releaseWakeLock()
                 stopForeground(STOP_FOREGROUND_REMOVE)
